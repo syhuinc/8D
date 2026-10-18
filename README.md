@@ -6,7 +6,7 @@ Everything runs locally in the browser using the Web Audio API. There is no serv
 
 ## Use it
 
-Open `index.html` in a browser, or host the folder on any static host (GitHub Pages works: Settings → Pages → deploy from branch).
+Open `index.html` in a browser, or host the folder on any static host. For GitHub Pages: Settings → Pages → Source: *Deploy from a branch* → `main` / `(root)`. The site will be at `https://<user>.github.io/<repo>/`. On a free GitHub account the repository must be public. A `.nojekyll` file is included so GitHub serves the files as-is, without a Jekyll build.
 
 1. Choose or drag in an audio file (MP3, WAV, M4A, OGG, or anything else your browser can decode).
 2. Press play and adjust the sliders while you listen through headphones.
