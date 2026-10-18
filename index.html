@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>8D Converter</title>
+  <meta name="description" content="Turn any song on your device into 8D audio. Runs entirely in your browser — nothing is uploaded.">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="wrap">
+    <header>
+      <h1>8D Converter</h1>
+      <p class="sub">Turn a song into 8D audio that circles around your head. Everything runs in your browser — your file is never uploaded.</p>
+      <p class="note">🎧 Use headphones. 8D doesn't work on speakers.</p>
+    </header>
+
+    <label id="drop" class="drop" for="file">
+      <input id="file" type="file" accept="audio/*">
+      <strong id="dropTitle">Choose a song</strong>
+      <span id="dropHint">or drag an audio file here (MP3, WAV, M4A, OGG…)</span>
+    </label>
+
+    <section id="player" class="card" hidden>
+      <div class="row">
+        <button id="play" class="primary" type="button" aria-label="Play">▶</button>
+        <div class="seek">
+          <input id="seek" type="range" min="0" max="1000" value="0" aria-label="Seek">
+          <div class="times"><span id="cur">0:00</span><span id="dur">0:00</span></div>
+        </div>
+      </div>
+      <canvas id="orbit" width="240" height="240" aria-label="Sound position, seen from above"></canvas>
+    </section>
+
+    <section id="controls" class="card" hidden>
+      <div class="ctl">
+        <label for="period">Orbit time <output id="periodOut"></output></label>
+        <input id="period" type="range" min="2" max="20" step="0.5" value="8">
+      </div>
+      <div class="ctl">
+        <label for="strength">Effect strength <output id="strengthOut"></output></label>
+        <input id="strength" type="range" min="0" max="100" value="100">
+      </div>
+      <div class="ctl">
+        <label for="reverb">Reverb <output id="reverbOut"></output></label>
+        <input id="reverb" type="range" min="0" max="100" value="30">
+      </div>
+      <div class="ctl">
+        <label for="height">Height wobble <output id="heightOut"></output></label>
+        <input id="height" type="range" min="0" max="100" value="0">
+      </div>
+      <label class="check"><input id="hrtf" type="checkbox" checked> 3D headphone mode (HRTF)</label>
+
+      <div class="ctl">
+        <label for="format">Download format</label>
+        <select id="format">
+          <option value="mp3-320">MP3 · 320 kbps (best quality)</option>
+          <option value="mp3-192" selected>MP3 · 192 kbps</option>
+          <option value="mp3-128">MP3 · 128 kbps (smallest)</option>
+          <option value="wav">WAV · lossless (large file)</option>
+        </select>
+      </div>
+
+      <button id="export" class="primary wide" type="button">Download 8D version</button>
+      <p id="status" class="status" role="status"></p>
+    </section>
+
+    <footer>
+      <p>Only convert music you have the right to use. Sharing converted copies of copyrighted songs is still sharing copyrighted songs.</p>
+      <p>MP3 encoding uses <a href="https://github.com/zhuker/lamejs">lamejs</a>, a JavaScript port of <a href="https://lame.sourceforge.io/">LAME</a> (LGPL).</p>
+    </footer>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
