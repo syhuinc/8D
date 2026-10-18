@@ -200,7 +200,8 @@ async function main() {
     await launch(); // force-stop + start: a fresh WebView
     assert.equal(await page.inputValue('#period'), '14', 'orbit time not remembered');
     assert.equal(await page.inputValue('#reverb'), '55', 'reverb not remembered');
-    await page.click('[data-preset="classic"]'); // leave defaults for the steps after
+    await loadSong('song.wav'); // a restart starts with no song; the steps after need one
+    await page.click('[data-preset="classic"]'); // and default settings
   });
 
   const pageBg = () => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
