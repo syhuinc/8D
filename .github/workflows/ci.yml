@@ -58,9 +58,7 @@ jobs:
             android/app/build/reports/lint-results-release.html
 
       - name: Install test tooling
-        run: |
-          npm ci
-          npx playwright install android
+        run: npm ci
 
       - name: Enable KVM for the emulator
         run: |

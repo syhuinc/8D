@@ -1,8 +1,7 @@
 // End-to-end test of the Android app on a connected device or emulator (run in CI).
 // Usage: node tests/android/smoke.mjs path/to/app-debug.apk
 //
-// Needs a *debug* APK (WebView debugging is only enabled there) and the
-// Playwright Android driver: `npx playwright install android`.
+// Needs a *debug* APK (WebView debugging is only enabled there) and adb on PATH.
 import { _android as android } from 'playwright';
 import { mkdir, writeFile } from 'node:fs/promises';
 import assert from 'node:assert/strict';
@@ -13,11 +12,44 @@ const OUT = 'test-results/android';
 const apk = process.argv[2];
 if (!apk) throw new Error('usage: node tests/android/smoke.mjs <debug apk>');
 
-const DOCS_UI = { pkg: /documentsui/ }; // the system file picker / "Save as" screen
+// Screen inspection goes through plain adb tools (dumpsys / uiautomator / input)
+// rather than Playwright's Android selector driver, which holds the single
+// UiAutomation connection and makes `uiautomator dump` return nothing.
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
 let device;
 let page;
+
+const sh = async (cmd) => (await device.shell(cmd)).toString();
+const focusedWindow = async () => (await sh('dumpsys window | grep mCurrentFocus')).trim();
+const pickerShowing = async () => /documentsui/i.test(await focusedWindow()); // system picker / "Save as"
+const pressBack = () => sh('input keyevent KEYCODE_BACK');
+
+async function waitUntil(check, what, timeout = 15_000) {
+  const end = Date.now() + timeout;
+  while (Date.now() < end) {
+    if (await check()) return;
+    await sleep(500);
+  }
+  throw new Error(`timed out after ${timeout / 1000}s waiting for ${what} (focus: ${await focusedWindow()})`);
+}
+
+/** All on-screen nodes as attribute maps, plus parsed bounds. */
+async function screenNodes() {
+  const xml = await sh('uiautomator dump /sdcard/ui.xml >/dev/null 2>&1; cat /sdcard/ui.xml');
+  return [...xml.matchAll(/<node ([^>]*?)\/?>/g)].map((m) => {
+    const a = Object.fromEntries([...m[1].matchAll(/([\w-]+)="([^"]*)"/g)].map((x) => [x[1], x[2]]));
+    const b = (a.bounds || '').match(/\[(\d+),(\d+)\]\[(\d+),(\d+)\]/);
+    if (b) a.box = { x1: +b[1], y1: +b[2], x2: +b[3], y2: +b[4] };
+    return a;
+  });
+}
+
+async function tapNode(match, what) {
+  let node;
+  await waitUntil(async () => (node = (await screenNodes()).find(match)), what);
+  await sh(`input tap ${(node.box.x1 + node.box.x2) >> 1} ${(node.box.y1 + node.box.y2) >> 1}`);
+}
 
 async function step(name, fn) {
   const t0 = Date.now();
@@ -34,14 +66,11 @@ async function step(name, fn) {
 }
 
 async function debugDump(name) {
-  const slug = name.replace(/\W+/g, '-');
-  try { await device.screenshot({ path: `${OUT}/${slug}.png` }); } catch {}
+  try { await device.screenshot({ path: `${OUT}/${name.replace(/\W+/g, '-')}.png` }); } catch {}
   try {
-    // Print what's on screen so failures are diagnosable from the CI log alone.
-    await device.shell('uiautomator dump /sdcard/ui.xml');
-    const xml = (await device.shell('cat /sdcard/ui.xml')).toString();
-    const nodes = [...xml.matchAll(/text="([^"]*)"[^>]*resource-id="([^"]*)"[^>]*package="([^"]*)"[^>]*bounds="([^"]*)"/g)]
-      .filter((m) => m[1] || m[2]).map((m) => `  ${m[3]} | ${m[2]} | "${m[1]}" ${m[4]}`);
+    console.log(`--- focus: ${await focusedWindow()}`);
+    const nodes = (await screenNodes()).filter((n) => n.text || n['content-desc'] || n['resource-id'])
+      .map((n) => `  ${n.package} | ${n['resource-id']} | "${n.text || n['content-desc']}" ${n.bounds}`);
     console.log(`--- screen at failure (${nodes.length} nodes) ---\n${nodes.join('\n')}`);
   } catch (e) { console.log('ui dump failed:', e.message); }
 }
@@ -94,18 +123,19 @@ async function main() {
   await step('content stays clear of the status and navigation bars', async () => {
     const size = (await device.shell('wm size')).toString().match(/(\d+)x(\d+)\s*$/m);
     const screenH = Number(size[2]);
-    const { bounds } = await device.info({ clazz: 'android.webkit.WebView' });
-    console.log(`  screen height ${screenH}px, WebView bounds ${JSON.stringify(bounds)}`);
-    assert.ok(bounds.y > 0, 'WebView starts under the status bar');
-    assert.ok(bounds.y + bounds.height < screenH, 'WebView extends under the navigation bar');
+    const webview = (await screenNodes()).find((n) => n.class === 'android.webkit.WebView');
+    assert.ok(webview, 'WebView not found on screen');
+    console.log(`  screen height ${screenH}px, WebView bounds ${webview.bounds}`);
+    assert.ok(webview.box.y1 > 0, 'WebView starts under the status bar');
+    assert.ok(webview.box.y2 < screenH, 'WebView extends under the navigation bar');
   });
 
   await step('file picker opens, and opens again after being cancelled', async () => {
     for (let i = 0; i < 2; i++) {
       await page.click('#drop');
-      await device.wait(DOCS_UI, { timeout: 15_000 });
-      await device.input.press('Back');
-      await device.wait(DOCS_UI, { state: 'gone', timeout: 15_000 });
+      await waitUntil(pickerShowing, `the file picker (attempt ${i + 1})`);
+      await pressBack();
+      await waitUntil(async () => !(await pickerShowing()), 'the picker to close');
       await sleep(500);
     }
   });
@@ -123,9 +153,10 @@ async function main() {
     await device.shell('rm -f "/sdcard/Download/song (8D).mp3"');
     await page.selectOption('#format', 'mp3-128');
     await page.click('#export');
-    await device.wait(DOCS_UI, { timeout: 60_000 });
+    await waitUntil(pickerShowing, 'the "Save as" screen', 60_000);
+    await sleep(1500);
     await device.screenshot({ path: `${OUT}/save-dialog.png` });
-    await device.tap({ text: /^save$/i });
+    await tapNode((n) => /^save$/i.test(n.text) && n.enabled === 'true', 'an enabled Save button');
     await page.waitForFunction(() => /Done|cancelled|failed/.test(document.getElementById('status').textContent), null, { timeout: 30_000 });
     assert.match(await status(), /^Done/);
     const listing = (await device.shell('ls -l /sdcard/Download/')).toString();
@@ -140,8 +171,8 @@ async function main() {
 
   await step('cancelling the "Save as" screen is reported', async () => {
     await page.click('#export');
-    await device.wait(DOCS_UI, { timeout: 60_000 });
-    await device.input.press('Back');
+    await waitUntil(pickerShowing, 'the "Save as" screen', 60_000);
+    await pressBack();
     await page.waitForFunction(() => document.getElementById('status').textContent === 'Save cancelled.', null, { timeout: 15_000 });
   });
 
