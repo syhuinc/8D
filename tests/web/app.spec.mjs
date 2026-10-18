@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { readFile, writeFile } from 'node:fs/promises';
-import { makeWav, makeMix, MIX, analyseInPage, placementInPage, orbitIsCorrect } from '../fixtures.mjs';
+import { makeWav, makeMix, MIX, analyseInPage, placementInPage, levelsInPage, orbitIsCorrect } from '../fixtures.mjs';
 
 const song = (name = 'song.wav', opts) => ({ name, mimeType: 'audio/wav', buffer: makeWav(opts) });
 
@@ -182,4 +182,75 @@ test('vocals mode explains that mono songs cannot be separated', async ({ page }
   await expect(page.locator('#vocalsNote')).toContainText('mono');
   await loadSong(page, { name: 'mix.wav', mimeType: 'audio/wav', buffer: makeMix() });
   await expect(page.locator('#vocalsNote')).not.toContainText('mono');
+});
+
+const mixFile = () => ({ name: 'mix.wav', mimeType: 'audio/wav', buffer: makeMix() });
+async function setSlider(page, id, value) {
+  await page.fill(`#${id}`, String(value));
+  await page.dispatchEvent(`#${id}`, 'input');
+  await page.dispatchEvent(`#${id}`, 'change');
+}
+
+test('presets set the sliders and show which one is active', async ({ page }) => {
+  await page.goto('');
+  await loadSong(page, song());
+  await expect(page.locator('[data-preset="classic"]')).toHaveAttribute('aria-pressed', 'true'); // defaults
+  await page.click('[data-preset="bass"]');
+  await expect(page.locator('#bass')).toHaveValue('9');
+  await expect(page.locator('#bassOut')).toHaveText('+9 dB');
+  await expect(page.locator('[data-preset="bass"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('[data-preset="classic"]')).toHaveAttribute('aria-pressed', 'false');
+  await setSlider(page, 'reverb', 41); // a manual change means no preset matches
+  await expect(page.locator('[aria-pressed="true"]')).toHaveCount(0);
+});
+
+test('settings are remembered after reloading', async ({ page }) => {
+  await page.goto('');
+  await loadSong(page, song());
+  await page.click('[data-preset="dreamy"]');
+  await page.setChecked('#hrtf', false);
+  await page.selectOption('#format', 'wav');
+  await page.reload();
+  await loadSong(page, song());
+  await expect(page.locator('#period')).toHaveValue('14');
+  await expect(page.locator('#reverb')).toHaveValue('55');
+  await expect(page.locator('#hrtf')).not.toBeChecked();
+  await expect(page.locator('#format')).toHaveValue('wav');
+  await expect(page.locator('[data-preset="dreamy"]')).toHaveAttribute('aria-pressed', 'true');
+});
+
+test('bass boost raises the low end and leaves the voice alone', async ({ browser }) => {
+  const levels = [];
+  for (const bass of [0, 12]) {
+    const page = await browser.newPage();
+    await page.goto('');
+    await loadSong(page, mixFile());
+    await setSlider(page, 'bass', bass);
+    const { bytes } = await exportAndDownload(page, 'wav');
+    levels.push(await levelsInPage(page, bytes, [55, MIX.voice[1]]));
+    await page.close();
+  }
+  const [off, on] = levels;
+  // Peak normalisation pulls the whole mix down when the bass gets louder,
+  // so compare the bass relative to the voice.
+  const lift = (on[55] - on[MIX.voice[1]]) - (off[55] - off[MIX.voice[1]]);
+  expect(lift, `bass rose ${lift.toFixed(1)} dB relative to the voice`).toBeGreaterThan(9);
+});
+
+test('vocal strictness decides whether a slightly off-centre sound stays in the middle', async ({ browser }) => {
+  const placement = {};
+  for (const [name, focus] of [['loose', 0], ['strict', 100]]) {
+    const page = await browser.newPage();
+    await page.goto('');
+    await loadSong(page, mixFile());
+    await setSlider(page, 'vocalFocus', focus);
+    await expect(page.locator('#export')).toBeEnabled(); // re-separation finished
+    const { bytes } = await exportAndDownload(page, 'wav');
+    placement[name] = await placementInPage(page, bytes, [MIX.synth[0], MIX.voice[1]]);
+    await page.close();
+  }
+  const synth = MIX.synth[0], voice = MIX.voice[1];
+  expect(isCentred(placement.loose[synth]), `loose, synth: ${placement.loose[synth]}`).toBe(true);
+  expect(orbitIsCorrect(placement.strict[synth]), `strict, synth: ${placement.strict[synth]}`).toBe(true);
+  expect(isCentred(placement.strict[voice]), `strict, voice: ${placement.strict[voice]}`).toBe(true); // the real centre stays
 });

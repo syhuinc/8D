@@ -194,6 +194,15 @@ async function main() {
 
   await step('no page errors so far', async () => assert.deepEqual(errors, []));
 
+  await step('settings survive an app restart', async () => {
+    await page.click('[data-preset="dreamy"]');
+    assert.equal(await page.inputValue('#period'), '14');
+    await launch(); // force-stop + start: a fresh WebView
+    assert.equal(await page.inputValue('#period'), '14', 'orbit time not remembered');
+    assert.equal(await page.inputValue('#reverb'), '55', 'reverb not remembered');
+    await page.click('[data-preset="classic"]'); // leave defaults for the steps after
+  });
+
   const pageBg = () => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
   const DARK = 'rgb(19, 19, 21)', LIGHT = 'rgb(246, 245, 242)';
 

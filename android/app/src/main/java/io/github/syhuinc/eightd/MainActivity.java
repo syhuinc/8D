@@ -69,6 +69,7 @@ public class MainActivity extends Activity {
         WebSettings settings = web.getSettings();
         settings.setJavaScriptEnabled(true);
         settings.setMediaPlaybackRequiresUserGesture(false);
+        settings.setDomStorageEnabled(true); // remembered settings (localStorage)
 
         web.addJavascriptInterface(new SaveBridge(), "Android8D");
         web.setWebChromeClient(new WebChromeClient() {

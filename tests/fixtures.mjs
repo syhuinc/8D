@@ -50,9 +50,10 @@ export function orbitIsCorrect(pattern) {
 /**
  * A stereo test "song" with known placement and pitches:
  * voice (centre, 523/1047/1570 Hz, syllable rhythm), guitar (mostly left,
- * 659/1319 Hz), piano (mostly right, 880/1760 Hz), bass (centre, 55/110 Hz).
+ * 659/1319 Hz), piano (mostly right, 880/1760 Hz), bass (centre, 55/110 Hz),
+ * and a slightly off-centre synth (60/40, 740 Hz) for the strictness setting.
  */
-export const MIX = { voice: [523.25, 1046.5, 1569.75], guitar: [659.25, 1318.5], piano: [880, 1760], bass: [55, 110] };
+export const MIX = { voice: [523.25, 1046.5, 1569.75], guitar: [659.25, 1318.5], piano: [880, 1760], bass: [55, 110], synth: [740] };
 export function makeMix({ sampleRate = 44100, seconds = 10 } = {}) {
   const frames = Math.round(sampleRate * seconds);
   const buf = Buffer.alloc(44 + frames * 4);
@@ -67,8 +68,9 @@ export function makeMix({ sampleRate = 44100, seconds = 10 } = {}) {
     const guitar = sum(MIX.guitar, t, 0.12);
     const piano = sum(MIX.piano, t, 0.1);
     const bass = sum(MIX.bass, t, 0.14);
-    const l = voice + 0.85 * guitar + 0.25 * piano + bass;
-    const r = voice + 0.25 * guitar + 0.85 * piano + bass;
+    const synth = sum(MIX.synth, t, 0.1);
+    const l = voice + 0.85 * guitar + 0.25 * piano + bass + 0.6 * synth;
+    const r = voice + 0.25 * guitar + 0.85 * piano + bass + 0.4 * synth;
     buf.writeInt16LE(Math.round(Math.max(-1, Math.min(1, l)) * 32767), 44 + i * 4);
     buf.writeInt16LE(Math.round(Math.max(-1, Math.min(1, r)) * 32767), 46 + i * 4);
   }
@@ -99,6 +101,27 @@ export async function placementInPage(page, bytes, freqs) {
         pattern += r > l * 1.585 ? 'R' : l > r * 1.585 ? 'L' : '=';
       }
       out[f] = pattern;
+    }
+    return out;
+  }, { b64: Buffer.from(bytes).toString('base64'), freqs });
+}
+
+/** Runs in the page: overall level (dB) of each frequency, both ears together. */
+export async function levelsInPage(page, bytes, freqs) {
+  return page.evaluate(async ({ b64, freqs }) => {
+    const data = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)).buffer;
+    const buf = await new OfflineAudioContext(2, 1, 44100).decodeAudioData(data);
+    const sr = buf.sampleRate, n = Math.min(buf.length, sr * 10);
+    const out = {};
+    for (const f of freqs) {
+      const w = 2 * Math.cos((2 * Math.PI * f) / sr);
+      let p = 0;
+      for (const x of [buf.getChannelData(0), buf.getChannelData(1)]) {
+        let s1 = 0, s2 = 0;
+        for (let i = 0; i < n; i++) { const s0 = x[i] + w * s1 - s2; s2 = s1; s1 = s0; }
+        p += s1 * s1 + s2 * s2 - w * s1 * s2;
+      }
+      out[f] = 10 * Math.log10(p + 1e-30);
     }
     return out;
   }, { b64: Buffer.from(bytes).toString('base64'), freqs });

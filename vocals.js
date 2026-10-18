@@ -16,8 +16,6 @@ const Vocals = (() => {
   const N = 2048;          // FFT size (~46 ms at 44.1 kHz)
   const HOP = N / 4;       // 75 % overlap
   const SMOOTH = 0.6;      // per-frame smoothing of the channel statistics
-  const SIM_LO = 0.7;      // L/R similarity below this: not centre
-  const SIM_HI = 0.95;     // ... above this: fully centre
   const BAND = [100, 150, 9000, 12000]; // vocal band with soft edges (Hz)
 
   function makeFft(n) {
@@ -79,8 +77,13 @@ const Vocals = (() => {
    * Returns the centre (vocal) track as a mono Float32Array, scaled like a
    * Web Audio stereo→mono downmix, i.e. relative to (L + R) / 2.
    * Yields to the browser regularly; onProgress receives 0..1.
+   * focus (0..1): how alike L and R must be to count as centre. 0.5 is the
+   * default; higher keeps only near-identical sound (less leaks into the
+   * voice), lower also catches slightly off-centre vocals.
    */
-  async function extractCenter(left, right, sampleRate, onProgress = () => {}) {
+  async function extractCenter(left, right, sampleRate, onProgress = () => {}, { focus = 0.5 } = {}) {
+    const simLo = 0.5 + 0.4 * focus;           // L/R similarity below this: not centre
+    const simHi = Math.min(0.99, simLo + 0.25); // ... above this: fully centre
     const len = left.length;
     const out = new Float32Array(len);
     const fft = makeFft(N);
@@ -118,7 +121,7 @@ const Vocals = (() => {
         slr[k] = SMOOTH * slr[k] + (1 - SMOOTH) * (lr * rr + li * ri);
         // 1 when L and R match in level and phase, 0 when unrelated or opposed.
         const similarity = (2 * slr[k]) / (sll[k] + srr[k] + 1e-20);
-        let mask = Math.min(1, Math.max(0, (similarity - SIM_LO) / (SIM_HI - SIM_LO)));
+        let mask = Math.min(1, Math.max(0, (similarity - simLo) / (simHi - simLo)));
         mask = mask * mask * (3 - 2 * mask) * band[k];
         cRe[k] = (mask * (lr + rr)) / 2;
         cIm[k] = (mask * (li + ri)) / 2;

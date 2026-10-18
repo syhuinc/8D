@@ -15,7 +15,39 @@ const params = {
   height: 0,      // vertical wobble amount
   hrtf: true,
   vocals: true,   // keep the centre (vocal) track still while the rest orbits
+  vocalFocus: 0.5, // vocal strictness, see Vocals.extractCenter
+  bass: 0,        // low-shelf boost in dB
+  format: 'mp3-192',
 };
+
+// One-tap combinations of the settings above.
+const PRESETS = {
+  classic: { label: 'Classic 8D', period: 8, strength: 1, reverb: 0.3, height: 0, bass: 0 },
+  dreamy: { label: 'Slow & dreamy', period: 14, strength: 1, reverb: 0.55, height: 0.3, bass: 3 },
+  fast: { label: 'Fast spin', period: 4, strength: 1, reverb: 0.15, height: 0, bass: 4 },
+  hall: { label: 'Concert hall', period: 10, strength: 0.9, reverb: 0.7, height: 0.1, bass: 2 },
+  bass: { label: 'Bass 8D', period: 8, strength: 1, reverb: 0.25, height: 0, bass: 9 },
+};
+
+// Settings are remembered between visits (per device). Storage can be
+// unavailable (private mode, blocked storage), so every access is guarded.
+const SETTINGS_KEY = '8d-converter.settings';
+const SAVED = ['period', 'strength', 'reverb', 'height', 'bass', 'hrtf', 'vocals', 'vocalFocus', 'format'];
+
+function loadSettings() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
+    for (const key of SAVED) {
+      if (typeof saved[key] === typeof params[key]) params[key] = saved[key];
+    }
+  } catch (_) { /* keep defaults */ }
+}
+
+function saveSettings() {
+  try {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(Object.fromEntries(SAVED.map((k) => [k, params[k]]))));
+  } catch (_) { /* not persisted this time */ }
+}
 
 const state = {
   ctx: null,
@@ -94,7 +126,10 @@ function buildGraph(ctx, p) {
   const master = new GainNode(ctx);
   bus.connect(dry).connect(master);
   bus.connect(convolver).connect(wet).connect(master);
-  master.connect(ctx.destination);
+  // Bass boost, then a limiter so boosted peaks don't clip during playback.
+  const bass = new BiquadFilterNode(ctx, { type: 'lowshelf', frequency: 120, gain: p.bass });
+  const limiter = new DynamicsCompressorNode(ctx, { threshold: -1, knee: 0, ratio: 20, attack: 0.003, release: 0.25 });
+  master.connect(bass).connect(limiter).connect(ctx.destination);
 
   // The voice gets a mono reverb: the stereo one is louder in one ear at some
   // pitches (random-noise impulse), which would pull sung notes off-centre.
@@ -104,7 +139,7 @@ function buildGraph(ctx, p) {
   vocal.connect(new ConvolverNode(ctx, { buffer: makeImpulse(ctx, 2.8, 2.5, 1) })).connect(vocalWet).connect(master);
 
   return {
-    input, vocalIn, panner, oscillators: [oscX, oscZ, oscY], gainY, spatial, vocal, original, dry, wet, vocalDry, vocalWet,
+    input, vocalIn, panner, oscillators: [oscX, oscZ, oscY], gainY, spatial, vocal, original, dry, wet, vocalDry, vocalWet, bass,
     start(when) { this.oscillators.forEach((o) => o.start(when)); },
   };
 }
@@ -147,6 +182,7 @@ function applyParams() {
   smooth(g.wet.gain, params.reverb);
   smooth(g.vocalDry.gain, 1 - params.reverb * 0.4);
   smooth(g.vocalWet.gain, params.reverb);
+  smooth(g.bass.gain, params.bass);
   g.panner.panningModel = params.hrtf ? 'HRTF' : 'equalpower';
 }
 
@@ -258,7 +294,7 @@ async function prepareVocals() {
   try {
     const centre = await Vocals.extractCenter(left, right, buffer.sampleRate, (f) => {
       if (job === state.vocalJob) setStatus(`Finding the vocals… ${Math.round(f * 100)}%`);
-    });
+    }, { focus: params.vocalFocus });
     if (job !== state.vocalJob) return; // a newer song or request took over
     const vb = new AudioBuffer({ numberOfChannels: 1, length: buffer.length, sampleRate: buffer.sampleRate });
     vb.copyToChannel(centre, 0);
@@ -291,7 +327,7 @@ const MP3_RATES = [8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000]
 async function exportFile() {
   const b = state.buffer;
   if (!b) return;
-  const [format, kbps] = $('format').value.split('-');
+  const [format, kbps] = params.format.split('-');
   const btn = $('export');
   exporting = true;
   btn.disabled = true;
@@ -513,11 +549,33 @@ function render() {
   $('strengthOut').textContent = `${Math.round(params.strength * 100)}%`;
   $('reverbOut').textContent = `${Math.round(params.reverb * 100)}%`;
   $('heightOut').textContent = `${Math.round(params.height * 100)}%`;
+  $('bassOut').textContent = params.bass ? `+${params.bass} dB` : 'off';
+  $('vocalFocusOut').textContent = params.vocalFocus < 0.34 ? 'loose' : params.vocalFocus > 0.66 ? 'strict' : 'balanced';
+  $('vocalFocusRow').hidden = !params.vocals;
+  const active = Object.keys(PRESETS).find((k) => matchesPreset(PRESETS[k]));
+  for (const b of document.querySelectorAll('[data-preset]')) b.setAttribute('aria-pressed', String(b.dataset.preset === active));
   if (!$('player').hidden) drawOrbit();
 }
 
 let seeking = false;
 let exporting = false;
+
+function matchesPreset(preset) {
+  return ['period', 'strength', 'reverb', 'height', 'bass'].every((k) => Math.abs(params[k] - preset[k]) < 1e-6);
+}
+
+/** Put the current params into the form controls (after loading settings or a preset). */
+function syncControls() {
+  $('period').value = params.period;
+  $('strength').value = Math.round(params.strength * 100);
+  $('reverb').value = Math.round(params.reverb * 100);
+  $('height').value = Math.round(params.height * 100);
+  $('bass').value = params.bass;
+  $('vocalFocus').value = Math.round(params.vocalFocus * 100);
+  $('hrtf').checked = params.hrtf;
+  $('vocals').checked = params.vocals;
+  $('format').value = params.format;
+}
 
 function bind() {
   $('file').addEventListener('change', (e) => {
@@ -549,22 +607,56 @@ function bind() {
   const slider = (id, key, scale) => $(id).addEventListener('input', (e) => {
     params[key] = Number(e.target.value) * scale;
     applyParams();
+    saveSettings();
     render();
   });
   slider('period', 'period', 1);
   slider('strength', 'strength', 0.01);
   slider('reverb', 'reverb', 0.01);
   slider('height', 'height', 0.01);
-  $('hrtf').addEventListener('change', (e) => { params.hrtf = e.target.checked; applyParams(); });
+  slider('bass', 'bass', 1);
+  $('hrtf').addEventListener('change', (e) => { params.hrtf = e.target.checked; applyParams(); saveSettings(); });
+  $('format').addEventListener('change', (e) => { params.format = e.target.value; saveSettings(); });
   $('vocals').addEventListener('change', async (e) => {
     params.vocals = e.target.checked;
+    saveSettings();
+    render();
     if (!state.buffer) return;
     if (params.vocals && !state.vocalBuffer) await prepareVocals();
     else if (state.playing) startSource(position());
     render();
   });
+  // Strictness changes the separation itself, so redo it once the slider is released.
+  $('vocalFocus').addEventListener('input', (e) => { params.vocalFocus = Number(e.target.value) / 100; render(); });
+  $('vocalFocus').addEventListener('change', async () => {
+    saveSettings();
+    if (!state.buffer || !params.vocals) return;
+    state.vocalBuffer = null;
+    if (state.playing) startSource(position()); // keep playing (without vocals mode) meanwhile
+    await prepareVocals();
+  });
+
+  const presets = $('presets');
+  for (const [key, preset] of Object.entries(PRESETS)) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'chip';
+    b.dataset.preset = key;
+    b.textContent = preset.label;
+    b.addEventListener('click', () => {
+      for (const k of ['period', 'strength', 'reverb', 'height', 'bass']) params[k] = preset[k];
+      syncControls();
+      applyParams();
+      saveSettings();
+      render();
+    });
+    presets.appendChild(b);
+  }
 
   $('export').addEventListener('click', exportFile);
+
+  loadSettings();
+  syncControls();
 
   const tick = () => { if (state.playing) render(); requestAnimationFrame(tick); };
   requestAnimationFrame(tick);

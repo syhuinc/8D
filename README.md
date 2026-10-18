@@ -12,13 +12,17 @@ Open `index.html` in a browser, or host the folder on any static host. For GitHu
 2. Press play and adjust the sliders while you listen through headphones.
 3. Pick a format (MP3 at 320, 192 or 128 kbps, or lossless WAV) and click **Download 8D version**.
 
+**Presets** (Classic 8D, Slow & dreamy, Fast spin, Concert hall, Bass 8D) set the sliders in one tap; the active one is highlighted. All settings are remembered on the device.
+
 | Control | What it does |
 | --- | --- |
 | Orbit time | Seconds per full circle around your head (2–20 s) |
 | Effect strength | Blends between the original stereo mix (0%) and fully rotating sound (100%) |
 | Reverb | Adds room sound, which helps the "out of your head" feel |
 | Height wobble | Moves the sound slightly up and down while it circles |
+| Bass boost | Low-shelf boost at 120 Hz, up to +12 dB; a limiter keeps playback from clipping |
 | Keep vocals in the center | On by default: the voice stays in the middle of your head and only the music orbits (see below) |
+| Vocal strictness | How alike both ears must be to count as voice. Stricter stops instruments sticking to the middle; looser catches slightly off-centre vocals |
 | 3D headphone mode | On: HRTF binaural panning (more realistic). Off: simple left/right panning |
 
 ## Android app
@@ -56,7 +60,8 @@ Without the signing properties the release APK is unsigned, and Android won't in
 - Picking the same file twice must reload it.
 - The page must load with no failed requests or errors.
 - A fake Android bridge must receive exactly the bytes a browser download would, and cancelling must be reported.
-- **Vocals mode:** a synthetic stereo song (centred voice, left-leaning guitar, right-leaning piano) is exported, and each instrument's pitch is measured per ear, per second. The voice must stay balanced while guitar and piano orbit. With the mode off, the voice must orbit too, which shows the measurement can tell the difference. Mono songs must show the "can't separate" note.
+- **Vocals mode:** a synthetic stereo song (centred voice, left-leaning guitar, right-leaning piano) is exported, and each instrument's pitch is measured per ear, per second. The voice must stay balanced while guitar and piano orbit. With the mode off, the voice must orbit too, which shows the measurement can tell the difference. Mono songs must show the "can't separate" note. A slightly off-centre synth must stay in the middle on "loose" and orbit on "strict".
+- **Presets** must set the sliders and highlight correctly. **Settings** must survive a reload. **Bass boost** must lift 55 Hz by more than 9 dB relative to the voice.
 
 **Android:** builds debug and release APKs, runs lint, then boots an Android 15 emulator and runs `tests/android/smoke.mjs` against the debug APK:
 
@@ -66,6 +71,7 @@ Without the signing properties the release APK is unsigned, and Android won't in
 - An MP3 export of the synthetic song is saved through the real *Save as* screen, then read back from `Download/`. The voice must be centred while guitar and piano orbit.
 - Cancelling the save must be reported.
 - Rotating must not reload the page.
+- Settings must survive a full app restart.
 - Dark mode must reach the page.
 
 WebView debugging, which the Android test relies on, is only switched on in debug builds. CI saves the APKs, the lint report and the emulator screenshots as artifacts on each run.
