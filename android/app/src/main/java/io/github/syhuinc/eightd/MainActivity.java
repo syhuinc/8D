@@ -3,14 +3,18 @@ package io.github.syhuinc.eightd;
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
+import android.content.pm.ApplicationInfo;
+import android.content.res.Configuration;
 import android.graphics.Color;
 import android.graphics.Insets;
+import android.graphics.drawable.ColorDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.util.Base64;
 import android.view.View;
 import android.view.WindowInsets;
+import android.view.WindowInsetsController;
 import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
@@ -52,6 +56,9 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
+        if ((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+            WebView.setWebContentsDebuggingEnabled(true); // debug builds only: lets tests/android drive the page
+        }
         FrameLayout root = new FrameLayout(this);
         web = new WebView(this);
         web.setBackgroundColor(Color.TRANSPARENT); // show the themed window background while loading
@@ -122,6 +129,34 @@ public class MainActivity extends Activity {
         });
     }
 
+    private boolean isDarkTheme() {
+        return (getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK)
+                == Configuration.UI_MODE_NIGHT_YES;
+    }
+
+    /**
+     * Dark mode was switched while the app is open. uiMode is in the manifest's
+     * configChanges so the page (and any loaded song) survives; restyle in place.
+     */
+    @Override
+    public void onConfigurationChanged(Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        boolean dark = isDarkTheme();
+        getWindow().setBackgroundDrawable(new ColorDrawable(getResources().getColor(R.color.page_bg, getTheme())));
+        if (Build.VERSION.SDK_INT >= 30) {
+            int light = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+            getWindow().getInsetsController().setSystemBarsAppearance(dark ? 0 : light, light);
+        } else {
+            View decor = getWindow().getDecorView();
+            // Before 27 the light theme keeps an opaque black navigation bar, so only its icons stay light.
+            int light = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+                    | (Build.VERSION.SDK_INT >= 27 ? View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR : 0);
+            int flags = decor.getSystemUiVisibility() & ~light;
+            decor.setSystemUiVisibility(dark ? flags : flags | light);
+        }
+        web.evaluateJavascript("document.documentElement.dataset.theme = '" + (dark ? "dark" : "light") + "'", null);
+    }
+
     @Override
     protected void onSaveInstanceState(Bundle outState) {
         super.onSaveInstanceState(outState);
@@ -180,8 +215,13 @@ public class MainActivity extends Activity {
         if (f != null && !f.delete()) f.deleteOnExit();
     }
 
-    /** Called from app.js (on the WebView's JavaBridge thread) to hand over an exported file. */
+    /** Called from the page (on the WebView's JavaBridge thread): theme, and handing over exported files. */
     private class SaveBridge {
+        @JavascriptInterface
+        public boolean isDarkTheme() {
+            return MainActivity.this.isDarkTheme();
+        }
+
         @JavascriptInterface
         public boolean begin(String name, String mime) {
             closePending();

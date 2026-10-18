@@ -8,8 +8,10 @@
   --accent-text: #ffffff;
   --dot: #e5484d;
 }
+/* Dark tokens apply from the system setting, or when the Android app sets
+   data-theme on <html> (it does so explicitly, see index.html). */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #131315;
     --card: #1d1d21;
     --text: #ecebe8;
@@ -19,6 +21,16 @@
     --accent-text: #111111;
     --dot: #ff6b6f;
   }
+}
+:root[data-theme="dark"] {
+  --bg: #131315;
+  --card: #1d1d21;
+  --text: #ecebe8;
+  --muted: #9b9890;
+  --line: #2e2e34;
+  --accent: #8b7dff;
+  --accent-text: #111111;
+  --dot: #ff6b6f;
 }
 
 * { box-sizing: border-box; }

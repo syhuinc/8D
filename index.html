@@ -8,6 +8,11 @@
   <link rel="icon" href="icons/favicon.svg" type="image/svg+xml">
   <link rel="icon" href="icons/favicon-32.png" type="image/png" sizes="32x32">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <script>
+    // In the Android app, take the theme from the app (before first paint):
+    // its WebView doesn't reliably report prefers-color-scheme.
+    try { if (window.Android8D) document.documentElement.dataset.theme = Android8D.isDarkTheme() ? 'dark' : 'light'; } catch (e) {}
+  </script>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
