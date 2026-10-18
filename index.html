@@ -51,12 +51,23 @@
       </div>
       <label class="check"><input id="hrtf" type="checkbox" checked> 3D headphone mode (HRTF)</label>
 
-      <button id="export" class="primary wide" type="button">Download 8D version (WAV)</button>
+      <div class="ctl">
+        <label for="format">Download format</label>
+        <select id="format">
+          <option value="mp3-320">MP3 · 320 kbps (best quality)</option>
+          <option value="mp3-192" selected>MP3 · 192 kbps</option>
+          <option value="mp3-128">MP3 · 128 kbps (smallest)</option>
+          <option value="wav">WAV · lossless (large file)</option>
+        </select>
+      </div>
+
+      <button id="export" class="primary wide" type="button">Download 8D version</button>
       <p id="status" class="status" role="status"></p>
     </section>
 
     <footer>
-      Only convert music you have the right to use. Sharing converted copies of copyrighted songs is still sharing copyrighted songs.
+      <p>Only convert music you have the right to use. Sharing converted copies of copyrighted songs is still sharing copyrighted songs.</p>
+      <p>MP3 encoding uses <a href="https://github.com/zhuker/lamejs">lamejs</a>, a JavaScript port of <a href="https://lame.sourceforge.io/">LAME</a> (LGPL).</p>
     </footer>
   </main>
   <script src="app.js"></script>

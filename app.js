@@ -213,15 +213,21 @@ async function loadFile(file) {
 
 // ---------- export ----------
 
-async function exportWav() {
+// Sample rates an MP3 (MPEG-1/2) stream can carry.
+const MP3_RATES = [8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000];
+
+async function exportFile() {
   const b = state.buffer;
   if (!b) return;
+  const [format, kbps] = $('format').value.split('-');
   const btn = $('export');
   btn.disabled = true;
   setStatus('Rendering 8D version… (this can take a little while for long songs)');
   try {
-    const tail = Math.ceil(b.sampleRate * 3); // let the reverb ring out
-    const off = new OfflineAudioContext({ numberOfChannels: 2, length: b.length + tail, sampleRate: b.sampleRate });
+    // Render straight at a rate MP3 supports; the source node resamples for us.
+    const rate = format === 'mp3' && !MP3_RATES.includes(b.sampleRate) ? 44100 : b.sampleRate;
+    const length = Math.ceil(b.duration * rate) + Math.ceil(rate * 3); // let the reverb ring out
+    const off = new OfflineAudioContext({ numberOfChannels: 2, length, sampleRate: rate });
     const g = buildGraph(off, params);
     const src = new AudioBufferSourceNode(off, { buffer: b });
     src.connect(g.input);
@@ -229,9 +235,11 @@ async function exportWav() {
     src.start(0);
     const rendered = await off.startRendering();
     normalise(rendered, 0.98);
-    const blob = encodeWav(rendered);
-    download(blob, `${state.fileName} (8D).wav`);
-    setStatus(`Done — ${(blob.size / 1048576).toFixed(1)} MB WAV saved.`);
+    const blob = format === 'mp3'
+      ? await encodeMp3(rendered, Number(kbps), (f) => setStatus(`Encoding MP3… ${Math.round(f * 100)}%`))
+      : encodeWav(rendered);
+    download(blob, `${state.fileName} (8D).${format}`);
+    setStatus(`Done — ${(blob.size / 1048576).toFixed(1)} MB ${format.toUpperCase()} saved.`);
   } catch (err) {
     console.error(err);
     setStatus('Export failed: ' + (err && err.message ? err.message : err) + '. Long songs can run out of memory on phones.');
@@ -271,12 +279,59 @@ function encodeWav(buffer) {
   let o = 44;
   for (let i = 0; i < frames; i++) {
     for (let c = 0; c < channels; c++) {
-      const s = Math.max(-1, Math.min(1, data[c][i]));
-      out.setInt16(o, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+      out.setInt16(o, toInt16(data[c][i]), true);
       o += 2;
     }
   }
   return new Blob([out.buffer], { type: 'audio/wav' });
+}
+
+function toInt16(x) {
+  const s = Math.max(-1, Math.min(1, x));
+  return s < 0 ? s * 0x8000 : s * 0x7fff;
+}
+
+// The encoder (~150 KB) is only fetched the first time someone exports MP3.
+let lameLoading = null;
+function loadLame() {
+  if (window.lamejs) return Promise.resolve();
+  lameLoading = lameLoading || new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'vendor/lamejs/lame.min.js';
+    s.onload = resolve;
+    s.onerror = () => { lameLoading = null; reject(new Error('could not load the MP3 encoder')); };
+    document.head.appendChild(s);
+  });
+  return lameLoading;
+}
+
+async function encodeMp3(buffer, kbps, onProgress) {
+  await loadLame();
+  const enc = new lamejs.Mp3Encoder(2, buffer.sampleRate, kbps);
+  const left = buffer.getChannelData(0);
+  const right = buffer.getChannelData(1);
+  const block = 1152 * 64; // multiple of the MP3 frame size
+  const l16 = new Int16Array(block);
+  const r16 = new Int16Array(block);
+  const parts = [];
+  let lastYield = performance.now();
+  for (let i = 0; i < left.length; i += block) {
+    const n = Math.min(block, left.length - i);
+    for (let j = 0; j < n; j++) {
+      l16[j] = toInt16(left[i + j]);
+      r16[j] = toInt16(right[i + j]);
+    }
+    const chunk = enc.encodeBuffer(l16.subarray(0, n), r16.subarray(0, n));
+    if (chunk.length) parts.push(chunk);
+    // Yield to the browser regularly so the page stays responsive and shows progress.
+    if (performance.now() - lastYield > 100) {
+      onProgress(i / left.length);
+      await new Promise((r) => setTimeout(r, 0));
+      lastYield = performance.now();
+    }
+  }
+  parts.push(enc.flush());
+  return new Blob(parts, { type: 'audio/mpeg' });
 }
 
 function download(blob, name) {
@@ -384,7 +439,7 @@ function bind() {
   slider('height', 'height', 0.01);
   $('hrtf').addEventListener('change', (e) => { params.hrtf = e.target.checked; applyParams(); });
 
-  $('export').addEventListener('click', exportWav);
+  $('export').addEventListener('click', exportFile);
 
   const tick = () => { if (state.playing) render(); requestAnimationFrame(tick); };
   requestAnimationFrame(tick);
