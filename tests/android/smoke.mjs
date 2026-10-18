@@ -189,11 +189,31 @@ async function main() {
 
   await step('no page errors so far', async () => assert.deepEqual(errors, []));
 
-  await step('dark mode: page follows the system theme', async () => {
+  const pageBg = () => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+  const DARK = 'rgb(19, 19, 21)', LIGHT = 'rgb(246, 245, 242)';
+
+  await step('dark mode switched while open: page restyles live and keeps the song', async () => {
+    assert.equal(await pageBg(), LIGHT);
+    await page.evaluate(() => { window.__notReloaded = true; });
+    await device.shell('cmd uimode night yes');
+    await page.waitForFunction(() => document.documentElement.dataset.theme === 'dark', null, { timeout: 15_000 });
+    assert.equal(await pageBg(), DARK);
+    assert.equal(await page.evaluate(() => window.__notReloaded), true, 'page was reloaded');
+    assert.equal(await page.textContent('#dropTitle'), 'song.wav');
+    await sleep(1000);
+    await device.screenshot({ path: `${OUT}/dark-live.png` });
+    await device.shell('cmd uimode night no');
+    await page.waitForFunction(() => document.documentElement.dataset.theme === 'light', null, { timeout: 15_000 });
+    assert.equal(await pageBg(), LIGHT);
+  });
+
+  await step('dark mode at launch: page starts dark', async () => {
     await device.shell('cmd uimode night yes');
     await launch();
-    assert.equal(await page.evaluate(() => matchMedia('(prefers-color-scheme: dark)').matches), true);
-    await device.screenshot({ path: `${OUT}/dark.png` });
+    assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), 'dark');
+    assert.equal(await pageBg(), DARK);
+    await sleep(1000);
+    await device.screenshot({ path: `${OUT}/dark-launch.png` });
     await device.shell('cmd uimode night no');
   });
 }

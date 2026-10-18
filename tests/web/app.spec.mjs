@@ -124,3 +124,24 @@ test('Android save bridge: cancelling the save dialog is reported', async ({ pag
   await expect(page.locator('#status')).toHaveText('Save cancelled.');
   await expect(page.locator('#export')).toBeEnabled();
 });
+
+test('theme: follows the system, and data-theme (set by the Android app) overrides it', async ({ page }) => {
+  const bg = () => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+  const DARK = 'rgb(19, 19, 21)', LIGHT = 'rgb(246, 245, 242)';
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await page.goto('');
+  expect(await bg()).toBe(DARK);
+  await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
+  expect(await bg()).toBe(LIGHT);
+  await page.emulateMedia({ colorScheme: 'light' });
+  await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
+  expect(await bg()).toBe(DARK);
+});
+
+test('theme: the page asks the Android app before first paint', async ({ page }) => {
+  await page.addInitScript(() => { window.Android8D = { isDarkTheme: () => true }; });
+  await page.emulateMedia({ colorScheme: 'light' });
+  await page.goto('');
+  expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe('dark');
+  expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe('rgb(19, 19, 21)');
+});
