@@ -14,6 +14,7 @@ const params = {
   reverb: 0.3,    // wet amount
   height: 0,      // vertical wobble amount
   hrtf: true,
+  vocals: true,   // keep the centre (vocal) track still while the rest orbits
 };
 
 const state = {
@@ -27,6 +28,10 @@ const state = {
   startedAt: 0,   // ctx time at which offset 0 of the current source would have played
   offset: 0,      // playback position (s) when not playing
   orbit: { basePhase: 0, baseTime: 0, freq: 1 / params.period },
+  vocalBuffer: null,  // mono centre track of the current song (see vocals.js)
+  vocalSource: null,
+  vocalJob: 0,
+  separating: false,
 };
 
 // ---------- audio graph ----------
@@ -36,12 +41,12 @@ function cosineWave(ctx) {
 }
 
 // Deterministic noise so preview and export use the same reverb.
-function makeImpulse(ctx, seconds, decay) {
+function makeImpulse(ctx, seconds, decay, channels = 2) {
   const len = Math.floor(ctx.sampleRate * seconds);
-  const ir = new AudioBuffer({ numberOfChannels: 2, length: len, sampleRate: ctx.sampleRate });
+  const ir = new AudioBuffer({ numberOfChannels: channels, length: len, sampleRate: ctx.sampleRate });
   let seed = 12345;
   const rand = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296) * 2 - 1;
-  for (let c = 0; c < 2; c++) {
+  for (let c = 0; c < channels; c++) {
     const data = ir.getChannelData(c);
     for (let i = 0; i < len; i++) data[i] = rand() * Math.pow(1 - i / len, decay);
   }
@@ -76,6 +81,13 @@ function buildGraph(ctx, p) {
   input.connect(mono).connect(panner).connect(spatial).connect(bus);
   input.connect(original).connect(bus);
 
+  // Vocals mode: the centre track plays in sync with the song. It is
+  // subtracted from what orbits and sent straight to the middle instead.
+  const vocalIn = new GainNode(ctx);
+  const vocal = new GainNode(ctx, { gain: p.strength });
+  vocalIn.connect(new GainNode(ctx, { gain: -1 })).connect(mono);
+  vocalIn.connect(vocal);
+
   const dry = new GainNode(ctx, { gain: 1 - p.reverb * 0.4 });
   const wet = new GainNode(ctx, { gain: p.reverb });
   const convolver = new ConvolverNode(ctx, { buffer: makeImpulse(ctx, 2.8, 2.5) });
@@ -84,8 +96,15 @@ function buildGraph(ctx, p) {
   bus.connect(convolver).connect(wet).connect(master);
   master.connect(ctx.destination);
 
+  // The voice gets a mono reverb: the stereo one is louder in one ear at some
+  // pitches (random-noise impulse), which would pull sung notes off-centre.
+  const vocalDry = new GainNode(ctx, { gain: 1 - p.reverb * 0.4 });
+  const vocalWet = new GainNode(ctx, { gain: p.reverb });
+  vocal.connect(vocalDry).connect(master);
+  vocal.connect(new ConvolverNode(ctx, { buffer: makeImpulse(ctx, 2.8, 2.5, 1) })).connect(vocalWet).connect(master);
+
   return {
-    input, panner, oscillators: [oscX, oscZ, oscY], gainY, spatial, original, dry, wet,
+    input, vocalIn, panner, oscillators: [oscX, oscZ, oscY], gainY, spatial, vocal, original, dry, wet, vocalDry, vocalWet,
     start(when) { this.oscillators.forEach((o) => o.start(when)); },
   };
 }
@@ -122,9 +141,12 @@ function applyParams() {
   }
   smooth(g.gainY.gain, params.height);
   smooth(g.spatial.gain, params.strength);
+  smooth(g.vocal.gain, params.strength);
   smooth(g.original.gain, 1 - params.strength);
   smooth(g.dry.gain, 1 - params.reverb * 0.4);
   smooth(g.wet.gain, params.reverb);
+  smooth(g.vocalDry.gain, 1 - params.reverb * 0.4);
+  smooth(g.vocalWet.gain, params.reverb);
   g.panner.panningModel = params.hrtf ? 'HRTF' : 'equalpower';
 }
 
@@ -152,14 +174,23 @@ function startSource(offset) {
   src.start(ctx.currentTime, offset);
   state.source = src;
   state.startedAt = ctx.currentTime - offset;
+  if (params.vocals && state.vocalBuffer) {
+    state.vocalSource = new AudioBufferSourceNode(ctx, { buffer: state.vocalBuffer });
+    state.vocalSource.connect(state.graph.vocalIn);
+    state.vocalSource.start(ctx.currentTime, offset); // same instant as the song: sample-aligned
+  }
 }
 
 function stopSource() {
   if (!state.source) return;
   state.sourceToken++;
-  try { state.source.stop(); } catch (_) { /* already stopped */ }
-  state.source.disconnect();
+  for (const src of [state.source, state.vocalSource]) {
+    if (!src) continue;
+    try { src.stop(); } catch (_) { /* already stopped */ }
+    src.disconnect();
+  }
   state.source = null;
+  state.vocalSource = null;
 }
 
 async function play() {
@@ -196,6 +227,7 @@ async function loadFile(file) {
     if (state.playing) pause();
     stopSource();
     state.buffer = buffer;
+    state.vocalBuffer = null;
     state.fileName = file.name.replace(/\.[^.]+$/, '') || 'song';
     state.offset = 0;
     $('dropTitle').textContent = file.name;
@@ -205,10 +237,50 @@ async function loadFile(file) {
     $('dur').textContent = fmt(buffer.duration);
     setStatus('');
     render();
+    if (params.vocals) await prepareVocals();
   } catch (err) {
     console.error(err);
     setStatus("Couldn't read that file. Your browser may not support this audio format — try MP3 or WAV.");
   }
+}
+
+// ---------- vocals mode ----------
+
+const VOCALS_HINT = 'Works on stereo songs. Other sounds mixed dead-center, often snare or lead guitar, stay in the middle with the voice.';
+
+async function prepareVocals() {
+  const buffer = state.buffer;
+  const job = ++state.vocalJob;
+  const left = buffer.getChannelData(0);
+  const right = buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : left;
+  state.separating = true;
+  render();
+  try {
+    const centre = await Vocals.extractCenter(left, right, buffer.sampleRate, (f) => {
+      if (job === state.vocalJob) setStatus(`Finding the vocals… ${Math.round(f * 100)}%`);
+    });
+    if (job !== state.vocalJob) return; // a newer song or request took over
+    const vb = new AudioBuffer({ numberOfChannels: 1, length: buffer.length, sampleRate: buffer.sampleRate });
+    vb.copyToChannel(centre, 0);
+    state.vocalBuffer = vb;
+    $('vocalsNote').textContent = isMono(left, right)
+      ? "This song is mono (both ears identical), so the voice can't be separated: only bass and cymbals will move."
+      : VOCALS_HINT;
+    setStatus('');
+    if (state.playing && params.vocals) startSource(position());
+  } finally {
+    if (job === state.vocalJob) state.separating = false;
+    render();
+  }
+}
+
+function isMono(left, right) {
+  let side = 0, mid = 0;
+  for (let i = 0; i < left.length; i += 16) {
+    side += (left[i] - right[i]) ** 2;
+    mid += (left[i] + right[i]) ** 2;
+  }
+  return side < mid * 1e-4;
 }
 
 // ---------- export ----------
@@ -221,6 +293,7 @@ async function exportFile() {
   if (!b) return;
   const [format, kbps] = $('format').value.split('-');
   const btn = $('export');
+  exporting = true;
   btn.disabled = true;
   setStatus('Rendering 8D version… (this can take a little while for long songs)');
   try {
@@ -233,6 +306,11 @@ async function exportFile() {
     src.connect(g.input);
     g.start(0);
     src.start(0);
+    if (params.vocals && state.vocalBuffer) {
+      const vocalSrc = new AudioBufferSourceNode(off, { buffer: state.vocalBuffer });
+      vocalSrc.connect(g.vocalIn);
+      vocalSrc.start(0);
+    }
     const rendered = await off.startRendering();
     normalise(rendered, 0.98);
     const blob = format === 'mp3'
@@ -244,7 +322,8 @@ async function exportFile() {
     console.error(err);
     setStatus('Export failed: ' + (err && err.message ? err.message : err) + '. Long songs can run out of memory on phones.');
   } finally {
-    btn.disabled = false;
+    exporting = false;
+    render();
   }
 }
 
@@ -406,6 +485,14 @@ function drawOrbit() {
   g.font = '11px system-ui, sans-serif'; g.textAlign = 'center';
   g.fillText('front', c, 12);
 
+  if (params.vocals && state.vocalBuffer) {
+    // The voice stays put in the middle; only the music travels round.
+    g.strokeStyle = css.getPropertyValue('--accent'); g.lineWidth = 3;
+    g.beginPath(); g.arc(c, c, 24, 0, Math.PI * 2); g.stroke();
+    g.fillStyle = css.getPropertyValue('--accent');
+    g.fillText('voice', c, c + 40);
+  }
+
   const a = orbitAngle();
   const x = c + Math.sin(a) * r * params.strength;
   const y = c - Math.cos(a) * r * params.strength;
@@ -421,6 +508,7 @@ function render() {
     $('cur').textContent = fmt(pos);
     if (!seeking) $('seek').value = String(Math.round((pos / state.buffer.duration) * 1000));
   }
+  $('export').disabled = state.separating || exporting;
   $('periodOut').textContent = `${params.period}s per circle`;
   $('strengthOut').textContent = `${Math.round(params.strength * 100)}%`;
   $('reverbOut').textContent = `${Math.round(params.reverb * 100)}%`;
@@ -429,6 +517,7 @@ function render() {
 }
 
 let seeking = false;
+let exporting = false;
 
 function bind() {
   $('file').addEventListener('change', (e) => {
@@ -467,6 +556,13 @@ function bind() {
   slider('reverb', 'reverb', 0.01);
   slider('height', 'height', 0.01);
   $('hrtf').addEventListener('change', (e) => { params.hrtf = e.target.checked; applyParams(); });
+  $('vocals').addEventListener('change', async (e) => {
+    params.vocals = e.target.checked;
+    if (!state.buffer) return;
+    if (params.vocals && !state.vocalBuffer) await prepareVocals();
+    else if (state.playing) startSource(position());
+    render();
+  });
 
   $('export').addEventListener('click', exportFile);
 

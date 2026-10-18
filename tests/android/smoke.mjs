@@ -5,7 +5,7 @@
 import { _android as android } from 'playwright';
 import { mkdir, writeFile } from 'node:fs/promises';
 import assert from 'node:assert/strict';
-import { makeWav, analyseInPage, orbitIsCorrect } from '../fixtures.mjs';
+import { makeMix, MIX, placementInPage, orbitIsCorrect } from '../fixtures.mjs';
 
 const PKG = 'io.github.syhuinc.eightd';
 const OUT = 'test-results/android';
@@ -86,7 +86,7 @@ async function launch() {
 async function loadSong(name) {
   // A real file pick needs a file on the device; injecting one through
   // DataTransfer exercises the same 'change' handler the picker triggers.
-  const b64 = makeWav().toString('base64');
+  const b64 = makeMix().toString('base64'); // stereo: centred voice + panned instruments
   await page.evaluate(({ b64, name }) => {
     const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
     const dt = new DataTransfer();
@@ -95,8 +95,10 @@ async function loadSong(name) {
     input.files = dt.files;
     input.dispatchEvent(new Event('change'));
   }, { b64, name });
+  // Loaded, and vocals mode has finished separating (export is enabled again).
   await page.waitForFunction((n) => document.getElementById('dropTitle').textContent === n
-    && document.getElementById('status').textContent === '', name, { timeout: 30_000 });
+    && !document.getElementById('export').disabled
+    && document.getElementById('status').textContent === '', name, { timeout: 60_000 });
 }
 
 const status = () => page.textContent('#status');
@@ -149,7 +151,7 @@ async function main() {
     await page.click('#play');
   });
 
-  await step('MP3 export saves through the "Save as" screen and keeps the orbit', async () => {
+  await step('MP3 export saves through the "Save as" screen; voice centred, music orbits', async () => {
     await device.shell('rm -f "/sdcard/Download/song (8D).mp3"');
     await page.selectOption('#format', 'mp3-128');
     await page.click('#export');
@@ -164,9 +166,12 @@ async function main() {
     const b64 = (await device.shell('base64 -w 0 "/sdcard/Download/song (8D).mp3"')).toString().trim();
     const bytes = Buffer.from(b64, 'base64');
     assert.ok(bytes.length > 100_000, `saved file is ${bytes.length} bytes`);
-    const a = await analyseInPage(page, bytes);
-    console.log(`  saved MP3: ${bytes.length} bytes, ${a.duration.toFixed(2)} s, pattern ${a.pattern}`);
-    assert.ok(orbitIsCorrect(a.pattern), `orbit pattern ${a.pattern}`);
+    // Vocals mode is on by default: voice centred, instruments orbiting.
+    const p = await placementInPage(page, bytes, [MIX.voice[1], MIX.guitar[0], MIX.piano[0]]);
+    console.log(`  saved MP3: ${bytes.length} bytes; L/R per second: ${JSON.stringify(p)}`);
+    assert.ok((p[MIX.voice[1]].match(/=/g) || []).length >= 9, `voice not centred: ${p[MIX.voice[1]]}`);
+    assert.ok(orbitIsCorrect(p[MIX.guitar[0]]), `guitar not orbiting: ${p[MIX.guitar[0]]}`);
+    assert.ok(orbitIsCorrect(p[MIX.piano[0]]), `piano not orbiting: ${p[MIX.piano[0]]}`);
   });
 
   await step('cancelling the "Save as" screen is reported', async () => {

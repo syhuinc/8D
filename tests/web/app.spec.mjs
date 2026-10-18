@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { readFile, writeFile } from 'node:fs/promises';
-import { makeWav, analyseInPage, orbitIsCorrect } from '../fixtures.mjs';
+import { makeWav, makeMix, MIX, analyseInPage, placementInPage, orbitIsCorrect } from '../fixtures.mjs';
 
 const song = (name = 'song.wav', opts) => ({ name, mimeType: 'audio/wav', buffer: makeWav(opts) });
 
@@ -39,6 +39,7 @@ test('page loads with no errors or failed requests', async ({ page }) => {
 test('WAV export orbits front → right → back → left', async ({ page }) => {
   await page.goto('');
   await loadSong(page, song());
+  await page.setChecked('#vocals', false); // mono test tone: let all of it orbit
   const { name, bytes } = await exportAndDownload(page, 'wav');
   expect(name).toBe('song (8D).wav');
   const a = await analyseInPage(page, bytes);
@@ -50,6 +51,7 @@ test('WAV export orbits front → right → back → left', async ({ page }) => 
 test('MP3 export is a valid stereo MP3 with the orbit intact', async ({ page }) => {
   await page.goto('');
   await loadSong(page, song());
+  await page.setChecked('#vocals', false); // mono test tone: let all of it orbit
   const { name, bytes } = await exportAndDownload(page, 'mp3-192');
   expect(name).toBe('song (8D).mp3');
   expect(bytes.length).toBeGreaterThan(200_000);
@@ -62,6 +64,7 @@ test('MP3 export is a valid stereo MP3 with the orbit intact', async ({ page }) 
 test('MP3 export resamples rates MP3 cannot carry (96 kHz → 44.1 kHz)', async ({ page }) => {
   await page.goto('');
   await loadSong(page, song('hires.wav', { sampleRate: 96000 }));
+  await page.setChecked('#vocals', false);
   const { bytes } = await exportAndDownload(page, 'mp3-320');
   // MP3 frame header: sync bits, then the sample-rate index (0 = 44.1 kHz for MPEG-1).
   const frame = bytes.indexOf(Buffer.from([0xff, 0xfb]));
@@ -97,15 +100,19 @@ const fakeBridge = (answer) => `
 test('Android save bridge receives exactly the bytes a browser would download', async ({ browser }) => {
   const file = song();
 
+  // Vocals mode off: its reverb path can differ by ±1 LSB between runs (convolver
+  // rounding), and this test is about the transfer, not the audio.
   const web = await browser.newPage();
   await web.goto('');
   await loadSong(web, file);
+  await web.setChecked('#vocals', false);
   const expected = (await exportAndDownload(web, 'mp3-192')).bytes;
 
   const app = await browser.newPage();
   await app.addInitScript(fakeBridge(true));
   await app.goto('');
   await loadSong(app, file);
+  await app.setChecked('#vocals', false);
   await app.selectOption('#format', 'mp3-192');
   await app.click('#export');
   await expect(app.locator('#status')).toContainText('Done');
@@ -144,4 +151,35 @@ test('theme: the page asks the Android app before first paint', async ({ page })
   await page.goto('');
   expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe('dark');
   expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe('rgb(19, 19, 21)');
+});
+
+// Vocals mode: centre (voice) stays put, everything else orbits.
+const isCentred = (p) => (p.match(/=/g) || []).length >= 9;
+
+async function exportMix(page, vocals) {
+  await page.goto('');
+  await loadSong(page, { name: 'mix.wav', mimeType: 'audio/wav', buffer: makeMix() });
+  await page.setChecked('#vocals', vocals);
+  await expect(page.locator('#export')).toBeEnabled();
+  const { bytes } = await exportAndDownload(page, 'wav');
+  return placementInPage(page, bytes, [...MIX.voice, MIX.guitar[0], MIX.piano[0]]);
+}
+
+test('vocals mode: the voice stays centred while guitar and piano orbit', async ({ page }) => {
+  const p = await exportMix(page, true);
+  for (const f of MIX.voice) expect(isCentred(p[f]), `voice ${f} Hz: ${p[f]}`).toBe(true);
+  for (const f of [MIX.guitar[0], MIX.piano[0]]) expect(orbitIsCorrect(p[f]), `${f} Hz: ${p[f]}`).toBe(true);
+});
+
+test('vocals mode off: the voice orbits too (control for the test above)', async ({ page }) => {
+  const p = await exportMix(page, false);
+  for (const f of MIX.voice) expect(isCentred(p[f]), `voice ${f} Hz: ${p[f]}`).toBe(false);
+});
+
+test('vocals mode explains that mono songs cannot be separated', async ({ page }) => {
+  await page.goto('');
+  await loadSong(page, song()); // identical channels
+  await expect(page.locator('#vocalsNote')).toContainText('mono');
+  await loadSong(page, { name: 'mix.wav', mimeType: 'audio/wav', buffer: makeMix() });
+  await expect(page.locator('#vocalsNote')).not.toContainText('mono');
 });

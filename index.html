@@ -57,6 +57,8 @@
         <label for="height">Height wobble <output id="heightOut"></output></label>
         <input id="height" type="range" min="0" max="100" value="0">
       </div>
+      <label class="check vocals"><input id="vocals" type="checkbox" checked> Keep vocals in the center (only the music orbits)</label>
+      <p id="vocalsNote" class="hint">Works on stereo songs. Other sounds mixed dead-center, often snare or lead guitar, stay in the middle with the voice.</p>
       <label class="check"><input id="hrtf" type="checkbox" checked> 3D headphone mode (HRTF)</label>
 
       <div class="ctl">
@@ -78,6 +80,7 @@
       <p>MP3 encoding uses <a href="https://github.com/zhuker/lamejs">lamejs</a>, a JavaScript port of <a href="https://lame.sourceforge.io/">LAME</a> (LGPL).</p>
     </footer>
   </main>
+  <script src="vocals.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

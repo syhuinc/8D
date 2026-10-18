@@ -18,6 +18,7 @@ Open `index.html` in a browser, or host the folder on any static host. For GitHu
 | Effect strength | Blends between the original stereo mix (0%) and fully rotating sound (100%) |
 | Reverb | Adds room sound, which helps the "out of your head" feel |
 | Height wobble | Moves the sound slightly up and down while it circles |
+| Keep vocals in the center | On by default: the voice stays in the middle of your head and only the music orbits (see below) |
 | 3D headphone mode | On: HRTF binaural panning (more realistic). Off: simple left/right panning |
 
 ## Android app
@@ -55,13 +56,14 @@ Without the signing properties the release APK is unsigned, and Android won't in
 - Picking the same file twice must reload it.
 - The page must load with no failed requests or errors.
 - A fake Android bridge must receive exactly the bytes a browser download would, and cancelling must be reported.
+- **Vocals mode:** a synthetic stereo song (centred voice, left-leaning guitar, right-leaning piano) is exported, and each instrument's pitch is measured per ear, per second. The voice must stay balanced while guitar and piano orbit. With the mode off, the voice must orbit too, which shows the measurement can tell the difference. Mono songs must show the "can't separate" note.
 
 **Android:** builds debug and release APKs, runs lint, then boots an Android 15 emulator and runs `tests/android/smoke.mjs` against the debug APK:
 
 - Content must stay clear of the system bars.
 - The file picker must open, and open again after being cancelled.
 - Playback must run.
-- An MP3 export is saved through the real *Save as* screen, then read back from `Download/` and checked for the orbit.
+- An MP3 export of the synthetic song is saved through the real *Save as* screen, then read back from `Download/`. The voice must be centred while guitar and piano orbit.
 - Cancelling the save must be reported.
 - Rotating must not reload the page.
 - Dark mode must reach the page.
@@ -69,6 +71,10 @@ Without the signing properties the release APK is unsigned, and Android won't in
 WebView debugging, which the Android test relies on, is only switched on in debug builds. CI saves the APKs, the lint report and the emulator screenshots as artifacts on each run.
 
 ## How it works
+
+**Vocals mode** (`vocals.js`): lead vocals are almost always mixed dead-centre, identical in both channels. The song is analysed in short overlapping slices (2048-point FFT, 75% overlap). In each slice and frequency bin, left and right are compared for level and phase. Bins that match, inside the vocal range (about 150 Hz to 9 kHz, with soft edges), form a mono "centre" track. During playback and export that track plays in sync with the song. It goes straight to the middle with its own mono reverb, so sung notes don't drift, and it is subtracted from what orbits, so nothing is doubled or lost. Bass below the vocal range and cymbals above it keep orbiting. Separation takes about 1.6 s per minute of audio on a desktop; phones are slower.
+
+Then, for the part that orbits:
 
 1. The song is summed to mono.
 2. A `PannerNode` places it in 3D space. Two oscillators drive its X and Z position (`sin` and `-cos`), so the source moves in a circle around the listener: front → right → behind → left.
@@ -82,6 +88,8 @@ WebView debugging, which the Android test relies on, is only switched on in debu
 - **Export speed.** MP3 encoding is pure JavaScript. A 4-minute song took about 35 s to render and encode in headless Chromium on a server, and phones will likely be slower. The result is about 5.6 MB at 192 kbps, against about 43 MB as WAV.
 - **MP3 sample rate.** Sources at rates MP3 can't carry (for example 96 kHz) are resampled to 44.1 kHz.
 - **Mono source.** The rotating part is mono, so the original stereo image is lost at 100% strength. That's normal for 8D.
+- **Vocal separation is mix-based, not AI.** Anything else mixed dead-centre in the vocal range (often snare, lead guitar or synth leads) stays in the middle with the voice. Mono songs can't be separated at all; the app says so. Clean separation needs a neural model such as Demucs, which would add a model download of tens of megabytes and minutes of processing per song on a phone.
+- **Low bass barely moves.** Below about 150 Hz the head hardly shadows sound, so even in normal 8D mode the bass orbit is faint.
 - **Memory.** Very long tracks can fail to export on low-memory phones.
 - **Copyright.** Converting a song doesn't give you the rights to it. Don't publish 8D versions of music you don't own.
 
