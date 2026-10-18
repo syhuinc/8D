@@ -405,7 +405,10 @@ function render() {
 let seeking = false;
 
 function bind() {
-  $('file').addEventListener('change', (e) => loadFile(e.target.files[0]));
+  $('file').addEventListener('change', (e) => {
+    loadFile(e.target.files[0]);
+    e.target.value = ''; // so picking the same file again still fires 'change'
+  });
 
   const drop = $('drop');
   drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
