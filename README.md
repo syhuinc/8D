@@ -20,6 +20,30 @@ Open `index.html` in a browser, or host the folder on any static host. For GitHu
 | Height wobble | Moves the sound slightly up and down while it circles |
 | 3D headphone mode | On: HRTF binaural panning (more realistic). Off: simple left/right panning |
 
+## Android app
+
+`android/` is a small native wrapper that bundles the same web app, so it runs fully offline. It asks for no permissions, not even internet access. The web files are copied in from the repository root at build time, so there is only one copy of the app code.
+
+A bare WebView can't save downloads, so the APK adds two native pieces in `MainActivity.java`:
+- **File picker:** handles `<input type=file>`.
+- **Save bridge:** `app.js` streams the exported file to the app in base64 chunks, then Android's *Save as* screen opens so you can choose where to save it.
+
+The app supports Android 7.0 (API 24) and later.
+
+### Build
+
+Requires JDK 17+ and the Android SDK (`ANDROID_HOME`) with `platforms;android-36` and `build-tools;35.0.0`.
+
+```sh
+cd android
+./gradlew assembleRelease \
+  -PreleaseKeystore=/path/to/key.jks -PreleaseKeystorePassword=... \
+  -PreleaseKeyAlias=... -PreleaseKeyPassword=...
+# -> app/build/outputs/apk/release/app-release.apk
+```
+
+Without the signing properties the release APK is unsigned, and Android won't install an unsigned APK. To install an update over an existing install, it must be signed with the same key as the first one.
+
 ## How it works
 
 1. The song is summed to mono.

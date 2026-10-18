@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Mirror the page background and accent colours in style.css. -->
+<resources>
+    <color name="page_bg">#F6F5F2</color>
+    <color name="icon_bg">#5B4BDB</color>
+</resources>

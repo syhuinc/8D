@@ -238,8 +238,8 @@ async function exportFile() {
     const blob = format === 'mp3'
       ? await encodeMp3(rendered, Number(kbps), (f) => setStatus(`Encoding MP3… ${Math.round(f * 100)}%`))
       : encodeWav(rendered);
-    download(blob, `${state.fileName} (8D).${format}`);
-    setStatus(`Done — ${(blob.size / 1048576).toFixed(1)} MB ${format.toUpperCase()} saved.`);
+    const saved = await download(blob, `${state.fileName} (8D).${format}`);
+    setStatus(saved ? `Done — ${(blob.size / 1048576).toFixed(1)} MB ${format.toUpperCase()} saved.` : 'Save cancelled.');
   } catch (err) {
     console.error(err);
     setStatus('Export failed: ' + (err && err.message ? err.message : err) + '. Long songs can run out of memory on phones.');
@@ -334,7 +334,8 @@ async function encodeMp3(buffer, kbps, onProgress) {
   return new Blob(parts, { type: 'audio/mpeg' });
 }
 
-function download(blob, name) {
+async function download(blob, name) {
+  if (window.Android8D) return saveWithAndroid(blob, name);
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -343,6 +344,31 @@ function download(blob, name) {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 60000);
+  return true;
+}
+
+// The Android app's WebView can't download blob: URLs, so it exposes a bridge
+// (android/app/src/main/java/.../MainActivity.java). The file goes over in
+// base64 chunks, then Android shows its "Save as" screen. Resolves to false
+// if the user cancels.
+async function saveWithAndroid(blob, name) {
+  const bridge = window.Android8D;
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  if (!bridge.begin(name, blob.type)) throw new Error('could not create the file');
+  const chunk = 3 * 256 * 1024; // multiple of 3 so each base64 piece decodes on its own
+  for (let i = 0; i < bytes.length; i += chunk) {
+    if (!bridge.append(toBase64(bytes.subarray(i, i + chunk)))) throw new Error('could not write the file');
+  }
+  return new Promise((resolve) => {
+    window.__android8dSaved = (ok) => { window.__android8dSaved = null; resolve(ok); };
+    bridge.finish();
+  });
+}
+
+function toBase64(bytes) {
+  let s = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(s);
 }
 
 // ---------- UI ----------
