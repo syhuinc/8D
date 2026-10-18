@@ -1,0 +1,12 @@
+{
+  "name": "8d-converter",
+  "private": true,
+  "description": "Tests and tooling for the 8D Converter web app and its Android wrapper.",
+  "scripts": {
+    "test": "playwright test",
+    "test:android": "node tests/android/smoke.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1"
+  }
+}

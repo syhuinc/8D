@@ -44,6 +44,30 @@ cd android
 
 Without the signing properties the release APK is unsigned, and Android won't install an unsigned APK. To install an update over an existing install, it must be signed with the same key as the first one.
 
+## Testing
+
+`.github/workflows/ci.yml` runs two jobs on every push and pull request.
+
+**Web (Chromium):** `npm ci && npx playwright install chromium && npm test`
+
+- WAV and MP3 exports are decoded back and checked for the orbit: right-heavy around 2 s, left-heavy around 6 s.
+- A 96 kHz source is checked to come out as a 44.1 kHz MP3.
+- Picking the same file twice must reload it.
+- The page must load with no failed requests or errors.
+- A fake Android bridge must receive exactly the bytes a browser download would, and cancelling must be reported.
+
+**Android:** builds debug and release APKs, runs lint, then boots an Android 15 emulator and runs `tests/android/smoke.mjs` against the debug APK:
+
+- Content must stay clear of the system bars.
+- The file picker must open, and open again after being cancelled.
+- Playback must run.
+- An MP3 export is saved through the real *Save as* screen, then read back from `Download/` and checked for the orbit.
+- Cancelling the save must be reported.
+- Rotating must not reload the page.
+- Dark mode must reach the page.
+
+WebView debugging, which the Android test relies on, is only switched on in debug builds. CI saves the APKs, the lint report and the emulator screenshots as artifacts on each run.
+
 ## How it works
 
 1. The song is summed to mono.

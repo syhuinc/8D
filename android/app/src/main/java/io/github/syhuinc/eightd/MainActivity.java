@@ -3,6 +3,7 @@ package io.github.syhuinc.eightd;
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
+import android.content.pm.ApplicationInfo;
 import android.graphics.Color;
 import android.graphics.Insets;
 import android.net.Uri;
@@ -52,6 +53,9 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
+        if ((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+            WebView.setWebContentsDebuggingEnabled(true); // debug builds only: lets tests/android drive the page
+        }
         FrameLayout root = new FrameLayout(this);
         web = new WebView(this);
         web.setBackgroundColor(Color.TRANSPARENT); // show the themed window background while loading
