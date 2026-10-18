@@ -69,7 +69,6 @@ public class MainActivity extends Activity {
         WebSettings settings = web.getSettings();
         settings.setJavaScriptEnabled(true);
         settings.setMediaPlaybackRequiresUserGesture(false);
-        settings.setDomStorageEnabled(true); // remembered settings (localStorage)
 
         web.addJavascriptInterface(new SaveBridge(), "Android8D");
         web.setWebChromeClient(new WebChromeClient() {
@@ -221,6 +220,18 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public boolean isDarkTheme() {
             return MainActivity.this.isDarkTheme();
+        }
+
+        // Remembered settings. SharedPreferences + commit() reach disk right away;
+        // WebView localStorage is flushed lazily and lost if the app is killed soon after.
+        @JavascriptInterface
+        public String loadSettings() {
+            return getSharedPreferences("settings", MODE_PRIVATE).getString("json", "");
+        }
+
+        @JavascriptInterface
+        public void saveSettings(String json) {
+            getSharedPreferences("settings", MODE_PRIVATE).edit().putString("json", json).commit();
         }
 
         @JavascriptInterface

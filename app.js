@@ -29,14 +29,16 @@ const PRESETS = {
   bass: { label: 'Bass 8D', period: 8, strength: 1, reverb: 0.25, height: 0, bass: 9 },
 };
 
-// Settings are remembered between visits (per device). Storage can be
-// unavailable (private mode, blocked storage), so every access is guarded.
+// Settings are remembered between visits (per device): in the Android app
+// through its bridge (SharedPreferences), otherwise in localStorage. Storage
+// can be unavailable (private mode, blocked storage), so every access is guarded.
 const SETTINGS_KEY = '8d-converter.settings';
 const SAVED = ['period', 'strength', 'reverb', 'height', 'bass', 'hrtf', 'vocals', 'vocalFocus', 'format'];
 
 function loadSettings() {
   try {
-    const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
+    const raw = window.Android8D && Android8D.loadSettings ? Android8D.loadSettings() : localStorage.getItem(SETTINGS_KEY);
+    const saved = JSON.parse(raw || '{}');
     for (const key of SAVED) {
       if (typeof saved[key] === typeof params[key]) params[key] = saved[key];
     }
@@ -44,8 +46,10 @@ function loadSettings() {
 }
 
 function saveSettings() {
+  const json = JSON.stringify(Object.fromEntries(SAVED.map((k) => [k, params[k]])));
   try {
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify(Object.fromEntries(SAVED.map((k) => [k, params[k]]))));
+    if (window.Android8D && Android8D.saveSettings) Android8D.saveSettings(json);
+    else localStorage.setItem(SETTINGS_KEY, json);
   } catch (_) { /* not persisted this time */ }
 }
 
@@ -604,12 +608,14 @@ function bind() {
     seekTo((seek.value / 1000) * state.buffer.duration);
   });
 
-  const slider = (id, key, scale) => $(id).addEventListener('input', (e) => {
-    params[key] = Number(e.target.value) * scale;
-    applyParams();
-    saveSettings();
-    render();
-  });
+  const slider = (id, key, scale) => {
+    $(id).addEventListener('input', (e) => {
+      params[key] = Number(e.target.value) * scale;
+      applyParams();
+      render();
+    });
+    $(id).addEventListener('change', saveSettings); // once per drag, on release
+  };
   slider('period', 'period', 1);
   slider('strength', 'strength', 0.01);
   slider('reverb', 'reverb', 0.01);
