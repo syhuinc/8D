@@ -260,6 +260,22 @@ async function main() {
     return dump.split('\n').filter((l) => /Effect ID|Session|Name:|Enabled|state:/i.test(l) && l.length < 160).slice(0, 40).join('\n');
   }
   const swing = (xs) => Math.max(...xs) - Math.min(...xs);
+  /**
+   * How strongly the left-minus-right difference follows the orbit (dB):
+   * the amplitude of its component at 1/period Hz. The meter is 8-bit and
+   * noisy, but noise mostly cancels out of this, while a real orbit adds up.
+   */
+  function orbitStrength(xs, period = 8) {
+    const d = xs.map((x) => x.l - x.r);
+    const mean = d.reduce((a, b) => a + b, 0) / d.length;
+    let re = 0, im = 0;
+    xs.forEach((x, i) => {
+      const w = (2 * Math.PI * x.t) / period;
+      re += (d[i] - mean) * Math.cos(w);
+      im += (d[i] - mean) * Math.sin(w);
+    });
+    return (2 * Math.hypot(re, im)) / xs.length;
+  }
   function correlation(a, b) {
     const ma = a.reduce((x, y) => x + y) / a.length, mb = b.reduce((x, y) => x + y) / b.length;
     let sab = 0, saa = 0, sbb = 0;
@@ -300,22 +316,22 @@ async function main() {
       if (w.length) perSecond.push(`${(w.reduce((a, x) => a + x.l, 0) / w.length).toFixed(0)}/${(w.reduce((a, x) => a + x.r, 0) / w.length).toFixed(0)}`);
     }
     const onSwing = swing(diff(on));
+    const onOrbit = orbitStrength(on);
     const corr = correlation(on.map((x) => x.l), on.map((x) => x.r));
     console.log(`  live on: ${on.length} readings; left/right dB per second: ${perSecond.join(' ')}`);
-    console.log(`  live on: left-minus-right swings ${onSwing.toFixed(1)} dB; left/right correlation ${corr.toFixed(2)}`);
+    console.log(`  live on: orbit-rhythm strength ${onOrbit.toFixed(1)} dB (left-minus-right swings ${onSwing.toFixed(1)} dB; correlation ${corr.toFixed(2)})`);
     assert.ok(on.length >= 40, 'too few level readings from the final mix');
-    assert.ok(onSwing > 16, 'the sound did not move between the ears');
-    assert.ok(corr < -0.3, 'left and right did not move in opposite directions');
+    assert.ok(onOrbit > 2.5, 'the sound did not move between the ears with the orbit rhythm');
 
     await page.evaluate(() => Android8D.liveStop());
     await sleep(1500);
     await device.shell('logcat -c');
-    await sleep(6000);
+    await sleep(16_500);
     const off = await playerLevels(where);
-    const offSwing = swing(diff(off));
-    console.log(`  live off: left-minus-right swings ${offSwing.toFixed(1)} dB`);
-    assert.ok(off.length >= 10, 'too few level readings after stopping');
-    assert.ok(offSwing < 4, 'the sound kept moving after live 8D was stopped');
+    const offOrbit = orbitStrength(off);
+    console.log(`  live off: orbit-rhythm strength ${offOrbit.toFixed(1)} dB (left-minus-right swings ${swing(diff(off)).toFixed(1)} dB)`);
+    assert.ok(off.length >= 40, 'too few level readings after stopping');
+    assert.ok(offOrbit < onOrbit / 3, 'the sound kept moving after live 8D was stopped');
     assert.equal(JSON.parse(await page.evaluate(() => Android8D.liveStatus())).running, false);
   });
 }
