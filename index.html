@@ -42,11 +42,16 @@
 
     <section id="live" class="card" hidden>
       <h2>Live 8D for other apps <span class="badge">beta</span></h2>
-      <p class="hint flush">Turn it on, then press play in your music app. Works with apps that support equalizers. Lighter than converting a file: the sound sweeps between your ears, but there is no full 3D and no vocal centering. Uses your Orbit time and Effect strength below.</p>
+      <p class="hint flush">Turn it on, then press play in your music app. With "Keep vocals in the center" on, the voice stays in the middle and the bass and highs move around you; turn it off to move everything. Lighter than converting a file. Uses your Orbit time and Effect strength below.</p>
       <div class="row live-row">
         <button id="liveToggle" class="primary" type="button">Start live 8D</button>
         <span id="liveStatus" class="status" role="status">Off</span>
       </div>
+      <label class="check live-all"><input id="liveAll" type="checkbox"> Process all audio (if your music app doesn't connect)</label>
+      <details id="liveLogBox">
+        <summary>What Live 8D sees</summary>
+        <ol id="liveLog" class="live-log"></ol>
+      </details>
     </section>
 
     <section id="controls" class="card">

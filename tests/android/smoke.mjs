@@ -261,13 +261,14 @@ async function main() {
   });
 
   /**
-   * Test player's per-0.25 s levels (dB) of its left (440 Hz) and right (660 Hz)
-   * tones, measured on its own session ('') or on the device's final mix ('mix_').
+   * Test player's per-0.25 s levels (dB) of a left-ear tone and a right-ear
+   * tone, measured on its own session ('') or on the device's final mix ('mix_').
+   * Voice band: 440 (left) / 660 (right). Highs: 7000 / 9000.
    */
-  async function playerLevels(where) {
+  async function playerLevels(where, leftHz, rightHz) {
     const log = (await device.shell('logcat -d -s TESTPLAYER:I')).toString();
-    return [...log.matchAll(new RegExp(`level t=([\\d.]+).*? ${where}left440=(-?[\\d.]+) ${where}right660=(-?[\\d.]+)`, 'g'))]
-      .map((m) => ({ t: +m[1], l: +m[2], r: +m[3] }));
+    const re = new RegExp(`level t=([\\d.]+).*? ${where}f${leftHz}=(-?[\\d.]+).*? ${where}f${rightHz}=(-?[\\d.]+)`, 'g');
+    return [...log.matchAll(re)].map((m) => ({ t: +m[1], l: +m[2], r: +m[3] }));
   }
   async function effectChain() {
     const dump = (await device.shell('dumpsys media.audio_flinger')).toString();
@@ -297,7 +298,7 @@ async function main() {
     return sab / Math.sqrt(saa * sbb + 1e-12);
   }
 
-  if (testPlayerApk) await step("live 8D moves another app's sound between the ears, and stops cleanly", async () => {
+  if (testPlayerApk) await step("live 8D: voice band stays centred while bass and highs move; everything moves when vocals mode is off; stops cleanly", async () => {
     await launch();
     await withTimeout(page.evaluate(() => Android8D.liveStart()), 'starting live 8D');
     await page.waitForFunction(() => JSON.parse(Android8D.liveStatus()).running, null, { timeout: 15_000 });
@@ -307,49 +308,44 @@ async function main() {
     await device.shell('am start -W -n io.github.syhuinc.eightd.testplayer/.PlayerActivity');
     await sleep(2000);
     const status = JSON.parse(await withTimeout(page.evaluate(() => Android8D.liveStatus()), 'reading live status'));
-    console.log(`  live status: ${JSON.stringify(status)}`);
+    console.log(`  live status: ${JSON.stringify(status.apps)}; log:\n    ${(status.log || []).slice(0, 6).join('\n    ')}`);
     assert.ok(status.apps.includes('io.github.syhuinc.eightd.testplayer'), 'live mode did not attach to the player');
 
-    await device.shell('logcat -c');
-    await sleep(16_500); // two circles at 8 s each
-    const own = await playerLevels('');
-    const mix = await playerLevels('mix_');
-    if (own.length) console.log(`  player's own session: swing left ${swing(own.map((x) => x.l)).toFixed(1)} dB, right ${swing(own.map((x) => x.r)).toFixed(1)} dB`);
-    if (mix.length) console.log(`  final output mix:     swing left ${swing(mix.map((x) => x.l)).toFixed(1)} dB, right ${swing(mix.map((x) => x.r)).toFixed(1)} dB`);
-    console.log(`  effect chain (audio_flinger):\n${await effectChain()}`);
-    const engine = (await device.shell('logcat -d -s 8DLIVE:*')).toString().trim().split('\n').slice(-6).join('\n');
-    console.log(`  engine log:\n${engine}`);
-    // The final mix is what is heard; its meter is auto-scaled, so judge the
-    // left-minus-right difference (in dB), which is what 8D changes.
-    const where = 'mix_';
-    const on = mix;
-    const diff = (xs) => xs.map((x) => x.l - x.r);
-    const perSecond = [];
-    for (let s = 0; s < 16; s++) {
-      const w = on.filter((x) => x.t >= on[0].t + s && x.t < on[0].t + s + 1);
-      if (w.length) perSecond.push(`${(w.reduce((a, x) => a + x.l, 0) / w.length).toFixed(0)}/${(w.reduce((a, x) => a + x.r, 0) / w.length).toFixed(0)}`);
-    }
-    const onSwing = swing(diff(on));
-    const onOrbit = orbitStrength(on);
-    const corr = correlation(on.map((x) => x.l), on.map((x) => x.r));
-    console.log(`  live on: ${on.length} readings; left/right dB per second: ${perSecond.join(' ')}`);
-    console.log(`  live on: orbit-rhythm strength ${onOrbit.toFixed(1)} dB (left-minus-right swings ${onSwing.toFixed(1)} dB; correlation ${corr.toFixed(2)})`);
-    assert.ok(on.length >= 40, 'too few level readings from the final mix');
-    // Seen 1.9-2.9 dB with 12 dB sides; noise after Stop 0.1-0.9 dB.
-    assert.ok(onOrbit > 1.5, 'the sound did not move between the ears with the orbit rhythm');
+    // Measure one stretch of two orbits; report voice band and highs.
+    const measure = async (label) => {
+      await device.shell('logcat -c');
+      await sleep(16_500);
+      const voice = await playerLevels('mix_', 440, 660), highs = await playerLevels('mix_', 7000, 9000);
+      const v = orbitStrength(voice), h = orbitStrength(highs);
+      console.log(`  ${label}: orbit rhythm voice band ${v.toFixed(1)} dB, highs ${h.toFixed(1)} dB (${voice.length} readings)`);
+      assert.ok(voice.length >= 40 && highs.length >= 40, 'too few level readings from the final mix');
+      return { v, h };
+    };
+
+    const centred = await measure('vocals centred (default)');
+    assert.ok(centred.h > 1.5, 'the highs did not move around the head');
+    assert.ok(centred.v < centred.h / 3, 'the voice band moved although vocals should stay centred');
+
+    // Turn "Keep vocals in the center" off: the service reads settings every 2 s.
+    await withTimeout(page.evaluate(() => { params.vocals = false; saveSettings(); }), 'changing settings');
+    await sleep(3000);
+    const everything = await measure('vocals mode off');
+    assert.ok(everything.v > 1.5, 'with vocals mode off, the voice band should move too');
+    await withTimeout(page.evaluate(() => { params.vocals = true; saveSettings(); }), 'restoring settings');
+
+    // "Process all audio": whether the emulator allows an effect on the output mix is unknown; report it.
+    await withTimeout(page.evaluate(() => { params.liveAll = true; saveSettings(); }), 'enabling all audio');
+    await sleep(3000);
+    const all = JSON.parse(await withTimeout(page.evaluate(() => Android8D.liveStatus()), 'reading live status'));
+    console.log(`  process all audio: attached to ${JSON.stringify(all.apps)}; log:\n    ${(all.log || []).slice(0, 4).join('\n    ')}`);
+    await withTimeout(page.evaluate(() => { params.liveAll = false; saveSettings(); }), 'disabling all audio');
+    await sleep(3000);
 
     await withTimeout(page.evaluate(() => Android8D.liveStop()), 'stopping live 8D');
     await sleep(1500);
-    await device.shell('logcat -c');
-    await sleep(16_500);
-    const off = await playerLevels(where);
-    const offOrbit = orbitStrength(off);
-    console.log(`  live off: orbit-rhythm strength ${offOrbit.toFixed(1)} dB (left-minus-right swings ${swing(diff(off)).toFixed(1)} dB)`);
-    assert.ok(off.length >= 40, 'too few level readings after stopping');
-    assert.ok(offOrbit < onOrbit / 3, 'the sound kept moving after live 8D was stopped');
-    // Ask Android, not the page: once live mode stops, the app has nothing
-    // running in the background and Android 14+ freezes its process, so a
-    // page query would never answer.
+    const off = await measure('after Stop');
+    assert.ok(off.h < centred.h / 3, 'the sound kept moving after live 8D was stopped');
+    // Ask Android, not the page: once live mode stops, Android 14+ freezes the app's process.
     const services = (await sh('dumpsys activity services io.github.syhuinc.eightd')).toString();
     assert.ok(!/LiveService/.test(services), 'LiveService is still running after Stop');
   });

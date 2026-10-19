@@ -23,7 +23,11 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.text.SimpleDateFormat;
+import java.util.ArrayDeque;
+import java.util.Date;
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -47,7 +51,11 @@ public class LiveService extends Service {
     private static final int NOTIFICATION_ID = 8;
     private static final int PRIORITY = 1000; // above typical equaliser apps, so our changes take effect
     private static final long FRAME_MS = 40;  // 25 updates per second
-    private static final float SPLIT_HZ = 3000f; // treble band (head shadow, front/back) starts here
+    // Three bands per ear: bass, the voice range, and highs. With "Keep vocals
+    // in the center" on, only bass and highs move; the voice band stays equal
+    // in both ears, so the voice stays in the middle.
+    private static final float BASS_TOP = 200f, VOICE_TOP = 5000f, HIGH_TOP = 20000f;
+    private static final int ALL_AUDIO = 0; // the device's output mix ("Process all audio")
 
     private static volatile LiveService instance;
 
@@ -57,8 +65,21 @@ public class LiveService extends Service {
     private long settingsReadAt;
     private double period = 8;  // seconds per circle, from the shared settings
     private double depth = 1;   // effect strength 0..1
+    private boolean keepVocals = true; // shared "Keep vocals in the center" setting
+    private boolean allAudio;          // shared "Process all audio" setting
     private int frames;
     private boolean debugLog; // per-second effect diagnostics, debug builds only
+
+    // What Live 8D saw recently, shown in the app so problems can be diagnosed on the phone.
+    private static final ArrayDeque<String> events = new ArrayDeque<>();
+
+    private static void event(String text) {
+        Log.i(TAG, text);
+        synchronized (events) {
+            events.addFirst(new SimpleDateFormat("HH:mm:ss", Locale.US).format(new Date()) + "  " + text);
+            while (events.size() > 15) events.removeLast();
+        }
+    }
 
     private static final class Attached {
         final String packageName;
@@ -75,9 +96,12 @@ public class LiveService extends Service {
         public void onReceive(Context context, Intent intent) {
             int session = intent.getIntExtra(AudioEffect.EXTRA_AUDIO_SESSION, AudioEffect.ERROR);
             String pkg = intent.getStringExtra(AudioEffect.EXTRA_PACKAGE_NAME);
+            boolean open = AudioEffect.ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION.equals(intent.getAction());
+            event((open ? "announced: " : "closed: ") + name(pkg) + " (session " + session + ")");
             if (session <= 0) return;
-            if (AudioEffect.ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION.equals(intent.getAction())) attach(session, pkg);
-            else detach(session);
+            if (!open) detach(session);
+            else if (allAudio) event("  not attached separately: \"Process all audio\" is on");
+            else attach(session, pkg);
         }
     };
 
@@ -103,8 +127,9 @@ public class LiveService extends Service {
         // Exported: these broadcasts come from other apps. Older Android ignores the flag.
         registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED);
         startedAt = System.nanoTime();
+        readSettings(startedAt);
+        event("Live 8D started" + (allAudio ? " (all audio)" : "") + ". Now press play in your music app.");
         main.post(this::frame);
-        Log.i(TAG, "live started");
     }
 
     @Override
@@ -116,20 +141,21 @@ public class LiveService extends Service {
     private void attach(int session, String pkg) {
         if (sessions.containsKey(session)) return;
         try {
-            DynamicsProcessing.Eq eq = new DynamicsProcessing.Eq(true, true, 2);
-            eq.setBand(0, new DynamicsProcessing.EqBand(true, SPLIT_HZ, 0f));
-            eq.setBand(1, new DynamicsProcessing.EqBand(true, 20000f, 0f));
+            DynamicsProcessing.Eq eq = new DynamicsProcessing.Eq(true, true, 3);
+            eq.setBand(0, new DynamicsProcessing.EqBand(true, BASS_TOP, 0f));
+            eq.setBand(1, new DynamicsProcessing.EqBand(true, VOICE_TOP, 0f));
+            eq.setBand(2, new DynamicsProcessing.EqBand(true, HIGH_TOP, 0f));
             DynamicsProcessing.Config config = new DynamicsProcessing.Config.Builder(
                     DynamicsProcessing.VARIANT_FAVOR_FREQUENCY_RESOLUTION, 2,
-                    true, 2, false, 0, false, 0, false)
+                    true, 3, false, 0, false, 0, false)
                     .setPreEqAllChannelsTo(eq)
                     .build();
             DynamicsProcessing effect = new DynamicsProcessing(PRIORITY, session, config);
             effect.setEnabled(true);
             sessions.put(session, new Attached(pkg, effect));
-            Log.i(TAG, "attached to session " + session + " (" + pkg + ")");
+            event("  attached to " + name(pkg) + (effect.hasControl() ? "" : " (another effect app has control!)"));
         } catch (RuntimeException e) {
-            Log.w(TAG, "could not attach to session " + session + " (" + pkg + "): " + e);
+            event("  could not attach to " + name(pkg) + ": " + e.getMessage());
         }
     }
 
@@ -137,7 +163,32 @@ public class LiveService extends Service {
         Attached a = sessions.remove(session);
         if (a == null) return;
         a.effect.release();
-        Log.i(TAG, "detached from session " + session);
+        event("  released " + name(a.packageName));
+    }
+
+    private static String name(String pkg) {
+        if (pkg == null || pkg.isEmpty()) return "an app";
+        switch (pkg) {
+            case "all audio": return "all audio";
+            case "com.apple.android.music": return "Apple Music";
+            case "com.spotify.music": return "Spotify";
+            case "com.google.android.apps.youtube.music": return "YouTube Music";
+            default: return pkg;
+        }
+    }
+
+    /** "Process all audio": one effect on the device's output mix, for apps that don't announce. */
+    private void setAllAudio(boolean on) {
+        if (on == allAudio) return;
+        allAudio = on;
+        for (Integer session : sessions.keySet().toArray(new Integer[0])) detach(session);
+        if (on) {
+            event("Process all audio: on");
+            attach(ALL_AUDIO, "all audio");
+            if (!sessions.containsKey(ALL_AUDIO)) event("  this phone doesn't allow it; turn it off and use apps that connect");
+        } else {
+            event("Process all audio: off. Press play again so your music app reconnects.");
+        }
     }
 
     /** One animation step: place the sound on the circle for the current time. */
@@ -149,31 +200,46 @@ public class LiveService extends Service {
         double x = Math.sin(angle);  // +1 right, -1 left
         double z = Math.cos(angle);  // +1 front, -1 back
         // Per-ear volume alone sounds like a left-right swing, so the circle is
-        // made audible with front/back contrast: clear and slightly bright in
-        // front, muffled and a little quieter behind. The sides stay moderate
-        // (12 dB) so the sound never feels stuck in one ear.
+        // made audible with front/back contrast: clear in front, muffled and a
+        // little quieter behind. The sides stay moderate (12 dB) so the sound
+        // never feels stuck in one ear. Gains only ever go down: some phones'
+        // effects may reject boosts.
         float ild = (float) (12 * depth);    // level difference at the sides (dB)
-        float shadow = (float) (8 * depth);  // treble cut in the far ear at the sides (dB)
-        float behind = (float) Math.max(0, -z), ahead = (float) Math.max(0, z);
-        float treble = (float) (depth * (2 * ahead - 10 * behind)); // brighter in front, muffled behind
-        float level = (float) (-2.5 * depth * behind);             // a little quieter behind
-        float leftGain = (float) (-ild * Math.max(0, x)) + level, rightGain = (float) (-ild * Math.max(0, -x)) + level;
-        float leftTreble = (float) (-shadow * Math.max(0, x)) + treble;
-        float rightTreble = (float) (-shadow * Math.max(0, -x)) + treble;
+        float shadow = (float) (8 * depth);  // extra treble cut in the far ear at the sides (dB)
+        float behind = (float) Math.max(0, -z);
+        float muffle = (float) (-12 * depth * behind); // highs behind the head
+        float dip = (float) (-2.5 * depth * behind);   // a little quieter behind
+        float[] side = {(float) Math.max(0, x), (float) Math.max(0, -x)}; // how far each ear is the far one
+        float[] input = new float[2], bass = new float[2], voice = new float[2], high = new float[2];
+        for (int ch = 0; ch < 2; ch++) {
+            float far = -ild * side[ch];
+            if (keepVocals) { // move bass and highs; the voice band stays put
+                input[ch] = 0;
+                bass[ch] = far + dip;
+                voice[ch] = 0;
+                high[ch] = far - shadow * side[ch] + muffle + dip;
+            } else {          // move everything
+                input[ch] = far + dip;
+                bass[ch] = 0;
+                voice[ch] = 0;
+                high[ch] = -shadow * side[ch] + muffle;
+            }
+        }
         for (Integer session : sessions.keySet().toArray(new Integer[0])) {
             DynamicsProcessing dp = sessions.get(session).effect;
             try {
-                dp.setInputGainbyChannel(0, leftGain);
-                dp.setInputGainbyChannel(1, rightGain);
-                dp.setPreEqBandByChannelIndex(0, 1, new DynamicsProcessing.EqBand(true, 20000f, leftTreble));
-                dp.setPreEqBandByChannelIndex(1, 1, new DynamicsProcessing.EqBand(true, 20000f, rightTreble));
+                for (int ch = 0; ch < 2; ch++) {
+                    dp.setInputGainbyChannel(ch, input[ch]);
+                    dp.setPreEqBandByChannelIndex(ch, 0, new DynamicsProcessing.EqBand(true, BASS_TOP, bass[ch]));
+                    dp.setPreEqBandByChannelIndex(ch, 1, new DynamicsProcessing.EqBand(true, VOICE_TOP, voice[ch]));
+                    dp.setPreEqBandByChannelIndex(ch, 2, new DynamicsProcessing.EqBand(true, HIGH_TOP, high[ch]));
+                }
                 if (debugLog && frames % 25 == 0) {
-                    Log.d(TAG, String.format("session %d: control=%b enabled=%b set L=%.1f R=%.1f dB, reads L=%.1f R=%.1f",
-                            session, dp.hasControl(), dp.getEnabled(), leftGain, rightGain,
-                            dp.getInputGainByChannelIndex(0), dp.getInputGainByChannelIndex(1)));
+                    Log.d(TAG, String.format("session %d: control=%b keepVocals=%b bass L/R=%.1f/%.1f high L/R=%.1f/%.1f input L/R=%.1f/%.1f",
+                            session, dp.hasControl(), keepVocals, bass[0], bass[1], high[0], high[1], input[0], input[1]));
                 }
             } catch (RuntimeException e) { // session ended, or another app took control
-                Log.w(TAG, "lost session " + session + ": " + e);
+                event("  lost " + name(sessions.get(session).packageName) + ": " + e.getMessage());
                 detach(session);
             }
         }
@@ -195,6 +261,8 @@ public class LiveService extends Service {
                 period = newPeriod;
             }
             depth = Math.max(0, Math.min(1, s.optDouble("strength", 1)));
+            keepVocals = s.optBoolean("vocals", true);
+            setAllAudio(s.optBoolean("liveAll", false));
         } catch (JSONException ignored) {
         }
     }
@@ -210,6 +278,11 @@ public class LiveService extends Service {
                 for (Attached a : s.sessions.values()) apps.put(a.packageName == null ? "" : a.packageName);
             }
             o.put("apps", apps);
+            JSONArray log = new JSONArray();
+            synchronized (events) {
+                for (String e : events) log.put(e);
+            }
+            o.put("log", log);
         } catch (JSONException ignored) {
         }
         return o.toString();
@@ -239,7 +312,7 @@ public class LiveService extends Service {
         unregisterReceiver(receiver);
         for (Attached a : sessions.values()) a.effect.release(); // music sounds normal again
         sessions.clear();
-        Log.i(TAG, "live stopped");
+        event("Live 8D stopped");
         super.onDestroy();
     }
 }

@@ -45,9 +45,11 @@ public class PlayerActivity extends Activity {
                 for (int i = 0; i < buf.length; i += 2, n++) {
                     // A louder 1 kHz tone in both ears sets the auto-scaled meter's
                     // range, so the 440/660 Hz readings stay below its 8-bit ceiling.
-                    double ref = 0.4 * Math.sin(2 * Math.PI * 1000 * n / RATE);
-                    buf[i] = (short) (32767 * (ref + 0.15 * Math.sin(2 * Math.PI * 440 * n / RATE)));
-                    buf[i + 1] = (short) (32767 * (ref + 0.15 * Math.sin(2 * Math.PI * 660 * n / RATE)));
+                    // Left ear: 440 Hz (voice band) + 7 kHz (highs); right: 660 Hz + 9 kHz.
+                    double ref = 0.35 * Math.sin(2 * Math.PI * 1000 * n / RATE);
+                    double t = (double) n / RATE;
+                    buf[i] = (short) (32767 * (ref + 0.12 * Math.sin(2 * Math.PI * 440 * t) + 0.12 * Math.sin(2 * Math.PI * 7000 * t)));
+                    buf[i + 1] = (short) (32767 * (ref + 0.12 * Math.sin(2 * Math.PI * 660 * t) + 0.12 * Math.sin(2 * Math.PI * 9000 * t)));
                 }
                 track.write(buf, 0, buf.length);
             }
@@ -82,8 +84,9 @@ public class PlayerActivity extends Activity {
                 Visualizer vis = (Visualizer) v[1];
                 if (vis == null || vis.getFft(fft) != Visualizer.SUCCESS) continue;
                 double rate = vis.getSamplingRate() / 1000.0;
-                line.append(String.format(" %sleft440=%.1f %sright660=%.1f",
-                        v[0], peakDb(fft, 440, fft.length, rate), v[0], peakDb(fft, 660, fft.length, rate)));
+                for (int hz : new int[]{440, 660, 7000, 9000}) {
+                    line.append(String.format(" %sf%d=%.1f", v[0], hz, peakDb(fft, hz, fft.length, rate)));
+                }
             }
             Log.i(TAG, line.toString());
         }

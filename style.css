@@ -84,6 +84,9 @@ h2 { margin: 0 0 6px; font-size: 17px; }
 .live-row { margin-top: 12px; }
 #liveToggle { padding: 10px 16px; flex: none; }
 .live-row .status { margin: 0; }
+.live-all { margin: 14px 0 6px; }
+details summary { font-size: 13px; color: var(--muted); cursor: pointer; }
+.live-log { margin: 6px 0 0; padding-left: 0; list-style: none; font: 12px/1.5 ui-monospace, Menlo, Consolas, monospace; color: var(--muted); word-break: break-word; }
 
 button { font: inherit; cursor: pointer; border: 0; border-radius: 10px; }
 button:disabled { opacity: 0.5; cursor: progress; }

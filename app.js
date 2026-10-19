@@ -17,6 +17,7 @@ const params = {
   vocals: true,   // keep the centre (vocal) track still while the rest orbits
   auto: true,     // follow the music: beat-synced orbit, faster in loud parts (auto.js)
   motion: 'scatter', // with the beat: 'circle', 'bounce' (left-right) or 'scatter' (here & there)
+  liveAll: false, // Live 8D: one effect on all audio, for apps that don't announce their session
   vocalFocus: 0.5, // vocal strictness, see Vocals.extractCenter
   bass: 0,        // low-shelf boost in dB
   format: 'mp3-192',
@@ -35,7 +36,7 @@ const PRESETS = {
 // through its bridge (SharedPreferences), otherwise in localStorage. Storage
 // can be unavailable (private mode, blocked storage), so every access is guarded.
 const SETTINGS_KEY = '8d-converter.settings';
-const SAVED = ['period', 'strength', 'reverb', 'height', 'bass', 'hrtf', 'vocals', 'vocalFocus', 'format', 'auto', 'motion'];
+const SAVED = ['period', 'strength', 'reverb', 'height', 'bass', 'hrtf', 'vocals', 'vocalFocus', 'format', 'auto', 'motion', 'liveAll'];
 
 function loadSettings() {
   try {
@@ -460,7 +461,7 @@ const APP_NAMES = {
   'com.spotify.music': 'Spotify', 'com.google.android.apps.youtube.music': 'YouTube Music',
   'com.google.android.youtube': 'YouTube', 'deezer.android.app': 'Deezer',
   'com.amazon.mp3': 'Amazon Music', 'com.soundcloud.android': 'SoundCloud',
-  'com.maxmpz.audioplayer': 'Poweramp', 'com.apple.android.music': 'Apple Music',
+  'com.maxmpz.audioplayer': 'Poweramp', 'com.apple.android.music': 'Apple Music', 'all audio': 'all audio',
 };
 
 function liveAvailable() {
@@ -475,11 +476,19 @@ function renderLive() {
   $('liveStatus').textContent = !status.running ? 'Off'
     : status.apps.length ? `On: ${status.apps.map((p) => APP_NAMES[p] || p).join(', ')}`
     : 'On: now press play in your music app';
+  const log = $('liveLog');
+  const lines = status.log || [];
+  if (log.dataset.shown !== lines.join('\n')) {
+    log.dataset.shown = lines.join('\n');
+    log.replaceChildren(...(lines.length ? lines : ['Nothing yet.']).map((l) => Object.assign(document.createElement('li'), { textContent: l })));
+  }
 }
 
 function bindLive() {
   if (!liveAvailable()) return;
   $('live').hidden = false;
+  $('liveAll').checked = params.liveAll;
+  $('liveAll').addEventListener('change', (e) => { params.liveAll = e.target.checked; saveSettings(); });
   $('liveToggle').addEventListener('click', () => {
     let running = false;
     try { running = JSON.parse(Android8D.liveStatus()).running; } catch (_) { /* treat as off */ }
