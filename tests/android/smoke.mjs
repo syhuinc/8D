@@ -22,6 +22,15 @@ let device;
 let page;
 
 const sh = async (cmd) => (await device.shell(cmd)).toString();
+
+/** Fails instead of hanging if the app's page stops answering (e.g. a frozen process). */
+function withTimeout(promise, what, ms = 15_000) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`timed out after ${ms / 1000}s ${what}`)), ms); }),
+  ]).finally(() => clearTimeout(timer));
+}
 const focusedWindow = async () => (await sh('dumpsys window | grep mCurrentFocus')).trim();
 const pickerShowing = async () => /documentsui/i.test(await focusedWindow()); // system picker / "Save as"
 const pressBack = () => sh('input keyevent KEYCODE_BACK');
@@ -288,14 +297,14 @@ async function main() {
 
   if (testPlayerApk) await step("live 8D moves another app's sound between the ears, and stops cleanly", async () => {
     await launch();
-    await page.evaluate(() => Android8D.liveStart());
+    await withTimeout(page.evaluate(() => Android8D.liveStart()), 'starting live 8D');
     await page.waitForFunction(() => JSON.parse(Android8D.liveStatus()).running, null, { timeout: 15_000 });
     await device.installApk(testPlayerApk);
     await device.shell('pm grant io.github.syhuinc.eightd.testplayer android.permission.RECORD_AUDIO');
     await device.shell('logcat -c');
     await device.shell('am start -W -n io.github.syhuinc.eightd.testplayer/.PlayerActivity');
     await sleep(2000);
-    const status = JSON.parse(await page.evaluate(() => Android8D.liveStatus()));
+    const status = JSON.parse(await withTimeout(page.evaluate(() => Android8D.liveStatus()), 'reading live status'));
     console.log(`  live status: ${JSON.stringify(status)}`);
     assert.ok(status.apps.includes('io.github.syhuinc.eightd.testplayer'), 'live mode did not attach to the player');
 
@@ -326,7 +335,7 @@ async function main() {
     assert.ok(on.length >= 40, 'too few level readings from the final mix');
     assert.ok(onOrbit > 2.5, 'the sound did not move between the ears with the orbit rhythm');
 
-    await page.evaluate(() => Android8D.liveStop());
+    await withTimeout(page.evaluate(() => Android8D.liveStop()), 'stopping live 8D');
     await sleep(1500);
     await device.shell('logcat -c');
     await sleep(16_500);
@@ -335,7 +344,11 @@ async function main() {
     console.log(`  live off: orbit-rhythm strength ${offOrbit.toFixed(1)} dB (left-minus-right swings ${swing(diff(off)).toFixed(1)} dB)`);
     assert.ok(off.length >= 40, 'too few level readings after stopping');
     assert.ok(offOrbit < onOrbit / 3, 'the sound kept moving after live 8D was stopped');
-    assert.equal(JSON.parse(await page.evaluate(() => Android8D.liveStatus())).running, false);
+    // Ask Android, not the page: once live mode stops, the app has nothing
+    // running in the background and Android 14+ freezes its process, so a
+    // page query would never answer.
+    const services = (await sh('dumpsys activity services io.github.syhuinc.eightd')).toString();
+    assert.ok(!/LiveService/.test(services), 'LiveService is still running after Stop');
   });
 }
 

@@ -32,7 +32,7 @@ jobs:
   android:
     name: Android build + emulator test
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30 # a normal run takes ~10; fail fast if something hangs
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
