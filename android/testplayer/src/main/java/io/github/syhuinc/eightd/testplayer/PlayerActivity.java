@@ -43,8 +43,11 @@ public class PlayerActivity extends Activity {
             long n = 0;
             while (true) {
                 for (int i = 0; i < buf.length; i += 2, n++) {
-                    buf[i] = (short) (0.3 * 32767 * Math.sin(2 * Math.PI * 440 * n / RATE));
-                    buf[i + 1] = (short) (0.3 * 32767 * Math.sin(2 * Math.PI * 660 * n / RATE));
+                    // A louder 1 kHz tone in both ears sets the auto-scaled meter's
+                    // range, so the 440/660 Hz readings stay below its 8-bit ceiling.
+                    double ref = 0.4 * Math.sin(2 * Math.PI * 1000 * n / RATE);
+                    buf[i] = (short) (32767 * (ref + 0.15 * Math.sin(2 * Math.PI * 440 * n / RATE)));
+                    buf[i + 1] = (short) (32767 * (ref + 0.15 * Math.sin(2 * Math.PI * 660 * n / RATE)));
                 }
                 track.write(buf, 0, buf.length);
             }
