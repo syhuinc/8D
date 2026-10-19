@@ -12,6 +12,8 @@ Open `index.html` in a browser, or host the folder on any static host. For GitHu
 2. Press play and adjust the sliders while you listen through headphones.
 3. Pick a format (MP3 at 320, 192 or 128 kbps, or lossless WAV) and click **Download 8D version**.
 
+**Compare with original** (under the player) switches between the effect and the untouched song at the same spot, so you can judge the difference. Both effects are level-matched to the song, measured on a stereo pink-noise mix: 8D within 0.1 dB, Spatial within 1 dB. Before this, 8D came out about 3 dB quieter than the song, and a quieter version sounds worse side by side even when it isn't. Very wide stereo still comes out about 2 dB quieter in 8D, because 8D sums the song to mono before moving it.
+
 **Presets** (Classic 8D, Slow & dreamy, Fast spin, Concert hall, Bass 8D) set the sliders in one tap; the active one is highlighted. All settings are remembered on the device.
 
 | Control | What it does |

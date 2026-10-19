@@ -78,6 +78,7 @@ const state = {
   motionBuffer: null, // the planned sound position, played in sync with the song
   motionSource: null,
   analysing: false,
+  comparing: false,   // "Compare with original" is held on
 };
 
 // ---------- audio graph ----------
@@ -100,6 +101,11 @@ function makeImpulse(ctx, seconds, decay, channels = 2) {
 }
 
 const CROSSFEED = 0.35; // about -9 dB
+// The moving music comes out about 3 dB quieter than the song (it is summed
+// to mono, and HRTF and the behind-the-head cues take some level), measured
+// on stereo pink noise. Made up here, so 8D isn't quieter than the original:
+// a quieter version sounds worse side by side even when it isn't.
+const EIGHTD_MAKEUP = 1.4; // +2.9 dB
 const BASS_SPLIT = 150;  // Hz: below this the bass is panned plainly (see buildGraph)
 const BASS_PAN = 0.85;   // how far the bass swings (1 = fully into one ear)
 
@@ -168,7 +174,7 @@ function buildGraph(ctx, p) {
   motionIn.connect(motionY, 1).connect(panner.positionY);
   motionIn.connect(zBus, 2);
 
-  const spatial = new GainNode(ctx, { gain: p.strength });
+  const spatial = new GainNode(ctx, { gain: p.strength * EIGHTD_MAKEUP });
   const original = new GainNode(ctx, { gain: 1 - p.strength });
   const bus = new GainNode(ctx);
   // Through headphones front and back sound alike, so a circle is heard as a
@@ -210,7 +216,8 @@ function buildGraph(ctx, p) {
   // Bass boost, then a limiter so boosted peaks don't clip during playback.
   const bass = new BiquadFilterNode(ctx, { type: 'lowshelf', frequency: 120, gain: p.bass });
   const limiter = new DynamicsCompressorNode(ctx, { threshold: -1, knee: 0, ratio: 20, attack: 0.003, release: 0.25 });
-  master.connect(bass).connect(limiter).connect(ctx.destination);
+  master.connect(bass).connect(limiter);
+  const out = outputStage(ctx, input, limiter);
 
   // The voice gets a mono reverb: the stereo one is louder in one ear at some
   // pitches (random-noise impulse), which would pull sung notes off-centre.
@@ -221,9 +228,31 @@ function buildGraph(ctx, p) {
 
   return {
     input, vocalIn, motionIn, panner, oscillators: [oscX, oscZ, oscY], gainX, gainZ, gainY, motionY, spatial, vocal, original, dry, wet, vocalDry, vocalWet, bass, bleed: crossed.bleed,
-    output: limiter,
+    ...out,
     start(when) { this.oscillators.forEach((o) => o.start(when)); },
     stop() { this.oscillators.forEach((o) => o.stop()); },
+  };
+}
+
+/**
+ * The end of both graphs. "Compare with original" crossfades from the
+ * processed sound to the song exactly as it is (the effects keep running,
+ * so switching back is instant). `output` is what gets disconnected when
+ * the graph is replaced.
+ */
+function outputStage(ctx, input, processed) {
+  const output = new GainNode(ctx);
+  const effect = new GainNode(ctx, { gain: 1 });
+  const bypass = new GainNode(ctx, { gain: 0 });
+  processed.connect(effect).connect(output);
+  input.connect(bypass).connect(output);
+  output.connect(ctx.destination);
+  return {
+    output,
+    compare(on, when) {
+      effect.gain.setTargetAtTime(on ? 0 : 1, when, 0.015);
+      bypass.gain.setTargetAtTime(on ? 1 : 0, when, 0.015);
+    },
   };
 }
 
@@ -238,7 +267,7 @@ const SPEAKERS = {
 };
 const SPATIAL_AMBIENCE = 0.5; // how loud the side speakers' wall reflections are
 const SPATIAL_HEIGHT = 1.5;   // height speakers' level at "Height" 100%
-const SPATIAL_TRIM = 0.6;     // the speakers add up louder than the song; this matches the loudness
+const SPATIAL_TRIM = 0.5;     // the speakers add up louder than the song; this matches the loudness
 
 /**
  * Spatial mode, an upmix of the stereo song in the spirit of surround
@@ -336,10 +365,10 @@ function buildSpatialGraph(ctx, p) {
   input.connect(original).connect(master);
   const bass = new BiquadFilterNode(ctx, { type: 'lowshelf', frequency: 120, gain: p.bass });
   const limiter = new DynamicsCompressorNode(ctx, { threshold: -1, knee: 0, ratio: 20, attack: 0.003, release: 0.25 });
-  master.connect(bass).connect(limiter).connect(ctx.destination);
+  master.connect(bass).connect(limiter);
 
   return {
-    input, vocalIn, motionIn: new GainNode(ctx), output: limiter,
+    input, vocalIn, motionIn: new GainNode(ctx), ...outputStage(ctx, input, limiter),
     start() {}, stop() {},
     apply(q, smooth) {
       smooth(spatial.gain, q.strength);
@@ -363,9 +392,17 @@ function rebuildGraph() {
   state.graph = buildGraph(ctx, params);
   state.graph.start(ctx.currentTime);
   state.orbit = { basePhase: 0, baseTime: ctx.currentTime, freq: 1 / params.period };
+  if (state.comparing) state.graph.compare(true, ctx.currentTime);
   if (state.playing) startSource(position());
   old.output.disconnect();
   old.stop();
+}
+
+/** "Compare with original": hear the song as it is, at the same position, then switch back. */
+function setComparing(on) {
+  state.comparing = on;
+  if (state.graph) state.graph.compare(on, state.ctx.currentTime);
+  render();
 }
 
 function ensureContext() {
@@ -404,7 +441,7 @@ function applyParams() {
   smooth(g.gainZ.gain, auto ? 0 : -1);
   smooth(g.gainY.gain, auto ? 0 : params.height);
   smooth(g.motionY.gain, auto ? params.height : 0);
-  smooth(g.spatial.gain, params.strength);
+  smooth(g.spatial.gain, params.strength * EIGHTD_MAKEUP);
   smooth(g.vocal.gain, params.strength);
   smooth(g.original.gain, 1 - params.strength);
   smooth(g.dry.gain, 1 - params.reverb * 0.4);
@@ -873,6 +910,7 @@ function drawOrbit() {
   const dot = css.getPropertyValue('--dot');
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
   g.clearRect(0, 0, size, size);
+  g.globalAlpha = 1;
   const c = size / 2, r = 76;
 
   g.strokeStyle = line; g.lineWidth = 2;
@@ -885,6 +923,7 @@ function drawOrbit() {
   g.font = '11px system-ui, sans-serif'; g.textAlign = 'center';
   g.fillText('front', c, 12);
 
+  g.globalAlpha = state.comparing ? 0.25 : 1; // the effect is bypassed while comparing
   if (params.vocals && state.vocalBuffer) {
     // The voice stays put in the middle; only the music travels round.
     g.strokeStyle = css.getPropertyValue('--accent'); g.lineWidth = 3;
@@ -928,6 +967,8 @@ function render() {
     ? 'Like sitting among speakers: voice in front, music around and above you. A still, room-like sound made from the stereo song. Use headphones.'
     : '';
   $('export').textContent = `Download ${modeName()} version`;
+  $('compare').setAttribute('aria-pressed', String(state.comparing));
+  $('compare').textContent = state.comparing ? `Hearing the original · tap for ${modeName()}` : 'Compare with original';
   $('orbit').setAttribute('aria-label', spatialMode ? 'Where the virtual speakers are, seen from above' : 'Sound position, seen from above');
   $('periodOut').textContent = autoActive() ? `target ${params.period}s` : `${params.period}s per circle`;
   $('motion').disabled = !params.auto;
@@ -981,6 +1022,7 @@ function bind() {
   });
 
   $('play').addEventListener('click', () => (state.playing ? pause() : play()));
+  $('compare').addEventListener('click', () => setComparing(!state.comparing));
 
   const seek = $('seek');
   seek.addEventListener('input', () => {
