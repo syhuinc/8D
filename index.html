@@ -47,6 +47,8 @@
         <button id="liveToggle" class="primary" type="button">Start live 8D</button>
         <span id="liveStatus" class="status" role="status">Off</span>
       </div>
+      <label class="check live-follow"><input id="liveFollow" type="checkbox"> Follow the song (move with the beat)</label>
+      <p id="liveFollowNote" class="hint">Android will ask to let 8D Converter record audio. It only listens to your music app's sound to find the kick and bass hits; nothing is recorded or saved, and the microphone isn't used. Uses the Movement setting below. Some apps don't allow listening; then the log says so and the sound circles on its own.</p>
       <label class="check live-all"><input id="liveAll" type="checkbox"> Process all audio (experiment)</label>
       <p class="hint">Only if your music app never appears in the log below. Many phones ignore this (it did nothing on our test device): if nothing moves, turn it off.</p>
       <details id="liveLogBox">

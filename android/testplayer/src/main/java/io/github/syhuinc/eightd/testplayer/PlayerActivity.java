@@ -19,6 +19,9 @@ public class PlayerActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         if (player != null) return;
+        // --ez kick true: add a kick drum at 120 BPM (a hit every 0.5 s), for "Follow the song".
+        boolean kick = getIntent().getBooleanExtra("kick", false);
+        Log.i(TAG, "kick=" + kick);
         AudioTrack track = new AudioTrack.Builder()
                 .setAudioAttributes(new AudioAttributes.Builder()
                         .setUsage(AudioAttributes.USAGE_MEDIA)
@@ -48,14 +51,21 @@ public class PlayerActivity extends Activity {
                     // Left ear: 440 Hz (voice band) + 7 kHz (highs); right: 660 Hz + 9 kHz.
                     double ref = 0.35 * Math.sin(2 * Math.PI * 1000 * n / RATE);
                     double t = (double) n / RATE;
-                    buf[i] = (short) (32767 * (ref + 0.12 * Math.sin(2 * Math.PI * 440 * t) + 0.12 * Math.sin(2 * Math.PI * 7000 * t)));
-                    buf[i + 1] = (short) (32767 * (ref + 0.12 * Math.sin(2 * Math.PI * 660 * t) + 0.12 * Math.sin(2 * Math.PI * 9000 * t)));
+                    double drum = kick ? kick(t % 0.5) : 0;
+                    buf[i] = (short) (32767 * (ref + drum + 0.12 * Math.sin(2 * Math.PI * 440 * t) + 0.12 * Math.sin(2 * Math.PI * 7000 * t)));
+                    buf[i + 1] = (short) (32767 * (ref + drum + 0.12 * Math.sin(2 * Math.PI * 660 * t) + 0.12 * Math.sin(2 * Math.PI * 9000 * t)));
                 }
                 track.write(buf, 0, buf.length);
             }
         }, "testplayer");
         player.start();
         new Thread(() -> measure(session), "testplayer-meter").start();
+    }
+
+    /** A kick drum hit, s seconds in: a quickly decaying sine whose pitch falls from 110 to 50 Hz. */
+    private static double kick(double s) {
+        double phase = 2 * Math.PI * (50 * s + 60 * (1 - Math.exp(-30 * s)) / 30);
+        return 0.3 * Math.exp(-12 * s) * Math.sin(phase);
     }
 
     /**

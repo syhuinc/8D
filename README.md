@@ -29,7 +29,7 @@ Open `index.html` in a browser, or host the folder on any static host. For GitHu
 
 ## Android app
 
-`android/` is a small native wrapper that bundles the same web app, so it runs fully offline, with no internet permission. The web files are copied in from the repository root at build time, so there is only one copy of the app code. The converter itself needs no permissions; Live 8D (below) adds `MODIFY_AUDIO_SETTINGS` plus the foreground-service and notification permissions.
+`android/` is a small native wrapper that bundles the same web app, so it runs fully offline, with no internet permission. The web files are copied in from the repository root at build time, so there is only one copy of the app code. The converter itself needs no permissions; Live 8D (below) adds `MODIFY_AUDIO_SETTINGS` plus the foreground-service and notification permissions. Its optional "Follow the song" adds `RECORD_AUDIO`, which is asked for only when you switch it on.
 
 A bare WebView can't save downloads, so the APK adds two native pieces in `MainActivity.java`:
 - **File picker:** handles `<input type=file>`.
@@ -47,12 +47,18 @@ Music apps announce their audio session so equalizer apps can process it (`Audio
 
 **"Process all audio" (experiment)** attaches one effect to the device's output mix instead (session 0), for apps that don't announce their session. On the Android 15 emulator the effect is accepted without error but **does nothing**: 0.0 dB of movement. That is the long-deprecated global session, which current Android ignores. Some phones may still honour it; the UI says so plainly. While it's on, the normal per-app connections are released, so it is only worth trying when an app never appears in the log.
 
+**"Follow the song"** (off by default) moves the sound on the kick and bass hits instead of circling at a fixed speed:
+- **Permission.** Android asks *"Allow 8D Converter to record audio?"* when you tick the box. That is the permission Android requires for an audio `Visualizer`. The app reads the music app's own sound, not the microphone, and nothing is recorded or saved. If you refuse twice, Android stops asking, and the next tick opens the app's Settings page instead. With the permission, the service runs as a foreground service of the microphone type: Android 11+ only lets a background app listen that way, and Android 14+ only allows that type once the permission is granted. Some phones may show a microphone indicator while it runs.
+- **Hearing the beat.** A `Visualizer` on each attached session sits before our effect, so it hears the original. 25 times a second, the bass level (bins up to 160 Hz) is read from its FFT. A hit is a rise of more than 4 dB and well above the usual rise over the last 2 s (mean + 2.5 × mean deviation), at most one every 250 ms. The tempo is the median gap between the last 8 hits.
+- **Movement.** It uses the shared Movement setting, with the same spots as the converter. Here & there cycles 12 spots; Left–right alternates 80° right and 80° left; Smooth circle takes one step per hit, sized for about one circle per orbit time. Each move glides the short way round in at most 0.3 s (35% of a beat).
+- **Fallback.** After 3 s without a hit (a quiet intro or a pause) it circles on its own at the orbit time. If a session gives only silence for 5 s, the log says so: the app may be paused, or it may not let other apps listen. [Whether Apple Music, Spotify and others allow it on real phones is untested.]
+
 **"What Live 8D sees"** in the Live card lists recent announcements, attaches and errors, so problems can be diagnosed on the phone.
 
-It uses the saved Orbit time and Effect strength. Nothing is captured or re-played, so there is no added latency. Stopping releases the effects and the music sounds normal again.
+It uses the saved Orbit time and Effect strength. The audio itself is never captured or re-played, so there is no added latency. Stopping releases the effects and the music sounds normal again.
 
 What it can't do, and why:
-- **It works per ear and per band.** It can't move a sound from one ear to the other, so a hard-left instrument fades rather than travels. It keeps the voice centred only by leaving the whole voice frequency range still. It doesn't follow the beat, because it never receives the audio. It is lighter than converting a file.
+- **It works per ear and per band.** It can't move a sound from one ear to the other, so a hard-left instrument fades rather than travels. It keeps the voice centred only by leaving the whole voice frequency range still. "Follow the song" reacts to bass hits after they are played (it reads 25 times a second; the exact delay on phones is unmeasured), whereas the converter plans moves ahead of time from the whole song. It is lighter than converting a file.
 - **It only reaches apps that announce their session.** By community reports Spotify does; others vary. Apps that don't announce their session aren't processed.
 - **No capture-based approach.** Capturing and re-playing other apps' audio was considered and rejected. It needs a protected permission granted over ADB to silence the originals, and Spotify, Chrome and SoundCloud block capture anyway.
 
@@ -100,6 +106,7 @@ Without the signing properties the release APK is unsigned, and Android won't in
 - **Live 8D:** `android/testplayer`, a test-only app, plays tones in the voice band (440 Hz left, 660 Hz right) and the highs (7 kHz left, 9 kHz right) over a louder centred 1 kHz reference, which keeps the 8-bit auto-scaled meter below its ceiling. It announces its session. On the device's final output mix, the strength of the 8 s orbit rhythm in the left-minus-right level is measured:
   - with vocals centred, the highs must move (measured about 20 dB) while the voice band stays still (about 0.8 dB);
   - with vocals mode off, the voice band must move too (about 11 dB);
+  - with "Follow the song" on (permission granted with `pm grant`), Movement Left–right, and a 120 BPM kick added to the test player: the service must report 110–130 BPM and about 21 hits in 10.5 s, and the highs must flip sides once per beat, measured as the 1 s rhythm in the left-minus-right level, while the voice band stays still;
   - after Stop, everything is still.
 
   "Process all audio" is measured and reported, not required; on the emulator it measured 0.0 dB.
@@ -119,7 +126,7 @@ WebView debugging, which the Android test relies on, is only switched on in debu
 - **Beat movement.** Here & there cycles through 12 spots around the head with big jumps between them (fixed, so preview and export match). Left–right alternates between 80° right and 80° left, passing through the front. Each move glides the short way round in at most 0.3 s (35% of a beat), then holds.
 - **Playback.** The result is a motion track (x/y/z position over time) that plays in sync with the song, like the vocal track, so preview, seeking and export match.
 
-Analysing a 4-minute song takes about 1.2 s on a desktop. Live 8D doesn't follow the music: it never receives the audio, only the ability to adjust it.
+Analysing a 4-minute song takes about 1.2 s on a desktop. Live 8D's "Follow the song" is a simpler, real-time version of this (see Live 8D above).
 
 Then, for the part that orbits:
 

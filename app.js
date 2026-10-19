@@ -18,6 +18,7 @@ const params = {
   auto: true,     // follow the music: beat-synced orbit, faster in loud parts (auto.js)
   motion: 'scatter', // with the beat: 'circle', 'bounce' (left-right) or 'scatter' (here & there)
   liveAll: false, // Live 8D: one effect on all audio, for apps that don't announce their session
+  liveFollow: false, // Live 8D: listen to the music app's sound and move on the beat (needs permission)
   vocalFocus: 0.5, // vocal strictness, see Vocals.extractCenter
   bass: 0,        // low-shelf boost in dB
   format: 'mp3-192',
@@ -36,7 +37,7 @@ const PRESETS = {
 // through its bridge (SharedPreferences), otherwise in localStorage. Storage
 // can be unavailable (private mode, blocked storage), so every access is guarded.
 const SETTINGS_KEY = '8d-converter.settings';
-const SAVED = ['period', 'strength', 'reverb', 'height', 'bass', 'hrtf', 'vocals', 'vocalFocus', 'format', 'auto', 'motion', 'liveAll'];
+const SAVED = ['period', 'strength', 'reverb', 'height', 'bass', 'hrtf', 'vocals', 'vocalFocus', 'format', 'auto', 'motion', 'liveAll', 'liveFollow'];
 
 function loadSettings() {
   try {
@@ -473,8 +474,9 @@ function renderLive() {
   try { status = JSON.parse(Android8D.liveStatus()); } catch (_) { return; }
   $('liveToggle').textContent = status.running ? 'Stop live 8D' : 'Start live 8D';
   $('liveToggle').setAttribute('aria-pressed', String(status.running));
+  const beat = status.follow && status.follow.onBeat ? ` · on the beat (${status.follow.bpm} BPM)` : '';
   $('liveStatus').textContent = !status.running ? 'Off'
-    : status.apps.length ? `On: ${status.apps.map((p) => APP_NAMES[p] || p).join(', ')}`
+    : status.apps.length ? `On: ${status.apps.map((p) => APP_NAMES[p] || p).join(', ')}${beat}`
     : 'On: now press play in your music app';
   const log = $('liveLog');
   const lines = status.log || [];
@@ -484,11 +486,40 @@ function renderLive() {
   }
 }
 
+// "Follow the song" needs Android's record-audio permission, asked for when it is switched on.
+function canListen() {
+  try { return !!(Android8D.canListen && Android8D.canListen()); } catch (_) { return false; }
+}
+
+function bindLiveFollow() {
+  const box = $('liveFollow'), note = $('liveFollowNote');
+  const intro = note.textContent;
+  box.checked = params.liveFollow && canListen();
+  let refusedForGood = false; // Android stops asking after two refusals; then only Settings can allow it
+  const set = (on) => { params.liveFollow = on; box.checked = on; saveSettings(); };
+  window.__android8dListen = (granted, askable) => {
+    if (granted) { note.textContent = intro; set(true); return; }
+    set(false);
+    refusedForGood = !askable;
+    note.textContent = askable
+      ? 'Not allowed, so Live 8D circles on its own. Tick the box to be asked again.'
+      : 'Not allowed, and Android won\'t ask again. Tick the box to open Settings, allow Microphone under Permissions, then come back and tick it.';
+  };
+  box.addEventListener('change', () => {
+    if (!box.checked) { set(false); return; }
+    if (canListen()) { note.textContent = intro; set(true); return; }
+    box.checked = false; // until Android says yes
+    if (refusedForGood && Android8D.openAppSettings) Android8D.openAppSettings();
+    else Android8D.requestListen();
+  });
+}
+
 function bindLive() {
   if (!liveAvailable()) return;
   $('live').hidden = false;
   $('liveAll').checked = params.liveAll;
   $('liveAll').addEventListener('change', (e) => { params.liveAll = e.target.checked; saveSettings(); });
+  bindLiveFollow();
   $('liveToggle').addEventListener('click', () => {
     let running = false;
     try { running = JSON.parse(Android8D.liveStatus()).running; } catch (_) { /* treat as off */ }

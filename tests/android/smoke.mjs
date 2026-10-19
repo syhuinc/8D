@@ -298,7 +298,7 @@ async function main() {
     return sab / Math.sqrt(saa * sbb + 1e-12);
   }
 
-  if (testPlayerApk) await step("live 8D: voice band stays centred while bass and highs move; everything moves when vocals mode is off; stops cleanly", async () => {
+  if (testPlayerApk) await step("live 8D: voice band stays centred while bass and highs move; everything moves when vocals mode is off; follows a beat; stops cleanly", async () => {
     await launch();
     await withTimeout(page.evaluate(() => Android8D.liveStart()), 'starting live 8D');
     await page.waitForFunction(() => JSON.parse(Android8D.liveStatus()).running, null, { timeout: 15_000 });
@@ -341,6 +341,38 @@ async function main() {
     if (all.apps.includes('all audio')) await measure('process all audio (reported, not required)');
     await withTimeout(page.evaluate(() => { params.liveAll = false; saveSettings(); }), 'disabling all audio');
     await sleep(3000);
+
+    // "Follow the song": with the record-audio permission (granted before Start, as
+    // the app's own flow does), a kick at 120 BPM and Movement "bounce", the highs
+    // should flip sides on every hit: one left-right cycle per second.
+    await withTimeout(page.evaluate(() => Android8D.liveStop()), 'stopping live 8D');
+    await sleep(1500);
+    await device.shell('pm grant io.github.syhuinc.eightd android.permission.RECORD_AUDIO');
+    await device.shell('am start -W -n io.github.syhuinc.eightd/.MainActivity'); // back to the front, so the page answers
+    await withTimeout(page.evaluate(() => { params.liveFollow = true; params.motion = 'bounce'; saveSettings(); }), 'enabling follow');
+    await withTimeout(page.evaluate(() => Android8D.liveStart()), 'starting live 8D');
+    await page.waitForFunction(() => JSON.parse(Android8D.liveStatus()).running, null, { timeout: 15_000 });
+    await device.shell('am force-stop io.github.syhuinc.eightd.testplayer');
+    await device.shell('am start -W -n io.github.syhuinc.eightd.testplayer/.PlayerActivity --ez kick true');
+    await sleep(4000);
+    const followMeasure = async () => {
+      await device.shell('logcat -c');
+      await sleep(10_500);
+      const voice = await playerLevels('mix_', 440, 660), highs = await playerLevels('mix_', 7000, 9000);
+      return { v: orbitStrength(voice, 1), h: orbitStrength(highs, 1), n: highs.length };
+    };
+    const before = JSON.parse(await withTimeout(page.evaluate(() => Android8D.liveStatus()), 'reading live status'));
+    const followed = await followMeasure();
+    const after = JSON.parse(await withTimeout(page.evaluate(() => Android8D.liveStatus()), 'reading live status'));
+    console.log(`  follow the song: ${JSON.stringify(after.follow)}, ${after.follow && before.follow ? after.follow.beats - before.follow.beats : '?'} hits in ~10.5 s;`
+      + ` 1-s left-right rhythm: highs ${followed.h.toFixed(1)} dB, voice band ${followed.v.toFixed(1)} dB (${followed.n} readings); log: ${(after.log || []).slice(0, 5).join(' | ')}`);
+    assert.ok(after.follow && after.follow.onBeat, 'live 8D did not find the beat');
+    assert.ok(after.follow.bpm >= 110 && after.follow.bpm <= 130, `wrong tempo: ${after.follow.bpm} BPM, expected 120`);
+    const hits = after.follow.beats - before.follow.beats;
+    assert.ok(hits >= 17 && hits <= 25, `expected about 21 hits in 10.5 s, got ${hits}`);
+    assert.ok(followed.h > 1.5, 'the highs did not flip sides with the beat');
+    assert.ok(followed.v < followed.h / 3, 'the voice band moved with the beat although vocals should stay centred');
+    await withTimeout(page.evaluate(() => { params.liveFollow = false; params.motion = 'scatter'; saveSettings(); }), 'disabling follow');
 
     await withTimeout(page.evaluate(() => Android8D.liveStop()), 'stopping live 8D');
     await sleep(1500);

@@ -284,6 +284,54 @@ test('live 8D card: in the app, starts and stops live mode and shows which apps 
   await expect(page.locator('#liveStatus')).toHaveText('Off');
 });
 
+test('live 8D: "Follow the song" asks for the permission, remembers the choice and shows the tempo', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.__live = { running: true, apps: ['com.spotify.music'], follow: { beats: 0, onBeat: false, bpm: 0 } };
+    window.__perm = { granted: false, asked: 0, settings: 0 };
+    window.Android8D = {
+      liveSupported: () => true,
+      liveStatus: () => JSON.stringify(window.__live),
+      canListen: () => window.__perm.granted,
+      requestListen: () => { window.__perm.asked++; },
+      openAppSettings: () => { window.__perm.settings++; },
+      saveSettings: (json) => { window.__saved = json; },
+      loadSettings: () => '',
+    };
+  });
+  await page.goto('');
+  const box = page.locator('#liveFollow');
+  await expect(box).not.toBeChecked();
+
+  // Refused: stays off, and ticking again asks again.
+  await box.click();
+  await expect.poll(() => page.evaluate(() => window.__perm.asked)).toBe(1);
+  await expect(box).not.toBeChecked();
+  await page.evaluate(() => window.__android8dListen(false, true));
+  await expect(page.locator('#liveFollowNote')).toContainText('asked again');
+  await box.click();
+  await expect.poll(() => page.evaluate(() => window.__perm.asked)).toBe(2);
+
+  // Refused for good: the next tick opens Settings instead of asking.
+  await page.evaluate(() => window.__android8dListen(false, false));
+  await expect(page.locator('#liveFollowNote')).toContainText('Settings');
+  await box.click();
+  await expect.poll(() => page.evaluate(() => window.__perm.settings)).toBe(1);
+  expect(await page.evaluate(() => window.__perm.asked)).toBe(2);
+  await expect(box).not.toBeChecked();
+
+  // Allowed (back from Settings): ticking turns it on and saves it for the live service.
+  await page.evaluate(() => { window.__perm.granted = true; });
+  await box.click();
+  await expect(box).toBeChecked();
+  expect(JSON.parse(await page.evaluate(() => window.__saved)).liveFollow).toBe(true);
+
+  await page.evaluate(() => { window.__live.follow = { beats: 12, onBeat: true, bpm: 124 }; });
+  await expect(page.locator('#liveStatus')).toHaveText('On: Spotify · on the beat (124 BPM)');
+
+  await box.click();
+  expect(JSON.parse(await page.evaluate(() => window.__saved)).liveFollow).toBe(false);
+});
+
 // Follow the music (auto.js)
 const beatFile = (opts) => ({ name: 'beat.wav', mimeType: 'audio/wav', buffer: makeBeat(opts) });
 
