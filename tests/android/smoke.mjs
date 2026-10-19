@@ -337,7 +337,8 @@ async function main() {
     await withTimeout(page.evaluate(() => { params.liveAll = true; saveSettings(); }), 'enabling all audio');
     await sleep(3000);
     const all = JSON.parse(await withTimeout(page.evaluate(() => Android8D.liveStatus()), 'reading live status'));
-    console.log(`  process all audio: attached to ${JSON.stringify(all.apps)}; log:\n    ${(all.log || []).slice(0, 4).join('\n    ')}`);
+    console.log(`  process all audio: attached to ${JSON.stringify(all.apps)}; log: ${(all.log || []).slice(0, 4).join(' | ')}`);
+    if (all.apps.includes('all audio')) await measure('process all audio (reported, not required)');
     await withTimeout(page.evaluate(() => { params.liveAll = false; saveSettings(); }), 'disabling all audio');
     await sleep(3000);
 
