@@ -39,17 +39,20 @@ The app supports Android 7.0 (API 24) and later.
 
 ### Live 8D for other apps (beta, Android 9+)
 
-Music apps announce their audio session so equalizer apps can process it (`AudioEffect.ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION`). `LiveService` is a foreground service with a Stop notification. It attaches Android's `DynamicsProcessing` effect to each announced session and animates it 25 times a second:
-- the far ear gets quieter, by up to 12 dB at the sides;
-- the far ear loses some treble (head shadow);
-- in front the sound is clear and slightly bright (+2 dB treble); behind, it is muffled (-10 dB treble) and 2.5 dB quieter.
+Music apps announce their audio session so equalizer apps can process it (`AudioEffect.ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION`). `LiveService` is a foreground service with a Stop notification. It attaches Android's `DynamicsProcessing` effect to each announced session, with three bands per ear (below 200 Hz, 200 Hz–5 kHz, above 5 kHz), and animates it 25 times a second:
+- **The far ear gets quieter**, by up to 12 dB at the sides, and the highs lose a further 8 dB of treble (head shadow).
+- **Behind the head** the highs are muffled (-12 dB) and the moving bands drop 2.5 dB. Per-ear volume alone is heard as a left-right swing; this front/back contrast turns it into a circle.
+- **With "Keep vocals in the center" on** (the default, shared with the converter), only the bass and high bands move. The 200 Hz–5 kHz band, where the voice is, stays equal in both ears, so the voice stays in the middle. Guitar and keys in that range stay centred too. With it off, everything moves.
+- **Gains only ever go down.** Version 1.6 briefly boosted the front by +2 dB; if a phone's effect rejects a boost, the app would drop the session.
 
-Per-ear volume alone is heard as a left-right swing; the front/back contrast is what turns it into a circle.
+**"Process all audio" (experiment)** attaches one effect to the device's output mix instead (session 0), for apps that don't announce their session. On the Android 15 emulator the effect is accepted without error but **does nothing**: 0.0 dB of movement. That is the long-deprecated global session, which current Android ignores. Some phones may still honour it; the UI says so plainly. While it's on, the normal per-app connections are released, so it is only worth trying when an app never appears in the log.
+
+**"What Live 8D sees"** in the Live card lists recent announcements, attaches and errors, so problems can be diagnosed on the phone.
 
 It uses the saved Orbit time and Effect strength. Nothing is captured or re-played, so there is no added latency. Stopping releases the effects and the music sounds normal again.
 
 What it can't do, and why:
-- **It works per ear.** It can't move a sound from one ear to the other, so a hard-left instrument fades rather than travels. It also can't keep vocals centred. It is lighter than converting a file.
+- **It works per ear and per band.** It can't move a sound from one ear to the other, so a hard-left instrument fades rather than travels. It keeps the voice centred only by leaving the whole voice frequency range still. It doesn't follow the beat, because it never receives the audio. It is lighter than converting a file.
 - **It only reaches apps that announce their session.** By community reports Spotify does; others vary. Apps that don't announce their session aren't processed.
 - **No capture-based approach.** Capturing and re-playing other apps' audio was considered and rejected. It needs a protected permission granted over ADB to silence the originals, and Spotify, Chrome and SoundCloud block capture anyway.
 
@@ -94,7 +97,12 @@ Without the signing properties the release APK is unsigned, and Android won't in
 - Rotating must not reload the page.
 - Settings must survive a full app restart.
 - Dark mode must reach the page.
-- **Live 8D:** `android/testplayer`, a test-only app, plays 440 Hz in the left ear and 660 Hz in the right, and announces its session. Live 8D must attach to it. On the device's final output mix, the left-minus-right level must follow the 8 s orbit rhythm (more than 2.5 dB at 1/8 Hz), and that rhythm must fade to under a third after Stop. The meter is 8-bit, so the test judges the rhythm rather than peak-to-peak swings.
+- **Live 8D:** `android/testplayer`, a test-only app, plays tones in the voice band (440 Hz left, 660 Hz right) and the highs (7 kHz left, 9 kHz right) over a louder centred 1 kHz reference, which keeps the 8-bit auto-scaled meter below its ceiling. It announces its session. On the device's final output mix, the strength of the 8 s orbit rhythm in the left-minus-right level is measured:
+  - with vocals centred, the highs must move (measured about 20 dB) while the voice band stays still (about 0.8 dB);
+  - with vocals mode off, the voice band must move too (about 11 dB);
+  - after Stop, everything is still.
+
+  "Process all audio" is measured and reported, not required; on the emulator it measured 0.0 dB.
 
 WebView debugging, which the Android test relies on, is only switched on in debug builds. CI saves the APKs, the lint report and the emulator screenshots as artifacts on each run.
 
