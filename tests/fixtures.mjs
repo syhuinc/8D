@@ -196,3 +196,36 @@ export async function orbitPeriodInPage(page, bytes, freq, from, to) {
     return NaN;
   }, { b64: Buffer.from(bytes).toString('base64'), freq, from, to });
 }
+
+/** A mono WAV of steady sine tones (equal level), for measuring the 3D cues. */
+export function makeTones({ freqs = [500, 8000], seconds = 10, sampleRate = 44100, amplitude = 0.2 } = {}) {
+  const frames = Math.round(sampleRate * seconds);
+  const buf = Buffer.alloc(44 + frames * 4);
+  buf.write('RIFF', 0); buf.writeUInt32LE(36 + frames * 4, 4); buf.write('WAVE', 8);
+  buf.write('fmt ', 12); buf.writeUInt32LE(16, 16); buf.writeUInt16LE(1, 20); buf.writeUInt16LE(2, 22);
+  buf.writeUInt32LE(sampleRate, 24); buf.writeUInt32LE(sampleRate * 4, 28); buf.writeUInt16LE(4, 32);
+  buf.writeUInt16LE(16, 34); buf.write('data', 36); buf.writeUInt32LE(frames * 4, 40);
+  for (let i = 0; i < frames; i++) {
+    const t = i / sampleRate;
+    const v = Math.round(freqs.reduce((s, f) => s + amplitude * Math.sin(2 * Math.PI * f * t), 0) * 32767);
+    buf.writeInt16LE(v, 44 + i * 4);
+    buf.writeInt16LE(v, 46 + i * 4);
+  }
+  return buf;
+}
+
+/** Runs in the page: level (dB) of one frequency in each ear between two times. */
+export async function earLevelsInPage(page, bytes, freq, from, to) {
+  return page.evaluate(async ({ b64, freq, from, to }) => {
+    const data = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)).buffer;
+    const buf = await new OfflineAudioContext(2, 1, 44100).decodeAudioData(data);
+    const sr = buf.sampleRate;
+    const level = (x) => {
+      const w = 2 * Math.cos((2 * Math.PI * freq) / sr);
+      let s1 = 0, s2 = 0;
+      for (let i = Math.round(from * sr); i < Math.round(to * sr); i++) { const s0 = x[i] + w * s1 - s2; s2 = s1; s1 = s0; }
+      return 10 * Math.log10(s1 * s1 + s2 * s2 - w * s1 * s2 + 1e-20);
+    };
+    return { left: level(buf.getChannelData(0)), right: level(buf.getChannelData(1)) };
+  }, { b64: Buffer.from(bytes).toString('base64'), freq, from, to });
+}

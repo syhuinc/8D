@@ -39,9 +39,11 @@ The app supports Android 7.0 (API 24) and later.
 ### Live 8D for other apps (beta, Android 9+)
 
 Music apps announce their audio session so equalizer apps can process it (`AudioEffect.ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION`). `LiveService` is a foreground service with a Stop notification. It attaches Android's `DynamicsProcessing` effect to each announced session and animates it 25 times a second:
-- the far ear gets quieter, by up to 16 dB at the sides;
+- the far ear gets quieter, by up to 12 dB at the sides;
 - the far ear loses some treble (head shadow);
-- sound gets duller when it's behind the listener.
+- in front the sound is clear and slightly bright (+2 dB treble); behind, it is muffled (-10 dB treble) and 2.5 dB quieter.
+
+Per-ear volume alone is heard as a left-right swing; the front/back contrast is what turns it into a circle.
 
 It uses the saved Orbit time and Effect strength. Nothing is captured or re-played, so there is no added latency. Stopping releases the effects and the music sounds normal again.
 
@@ -77,6 +79,7 @@ Without the signing properties the release APK is unsigned, and Android won't in
 - A fake Android bridge must receive exactly the bytes a browser download would, and cancelling must be reported.
 - **Vocals mode:** a synthetic stereo song (centred voice, left-leaning guitar, right-leaning piano) is exported, and each instrument's pitch is measured per ear, per second. The voice must stay balanced while guitar and piano orbit. With the mode off, the voice must orbit too, which shows the measurement can tell the difference. Mono songs must show the "can't separate" note. A slightly off-centre synth must stay in the middle on "loose" and orbit on "strict".
 - **Follow the music:** tempo detection must be accurate to 0.3 BPM on drum tracks (0.5 with heavy noise) and must reject plain noise. The exported orbit of a 100 BPM track must measure 9.6 s (16 beats) with the feature on and 8 s with it off. A track with a quiet half and a loud half must orbit at 9.6 s and 2.4 s respectively, with the target set to 4 s. Orbit lengths are measured from the exported audio.
+- **3D cues:** from front to back, an 8 kHz tone must drop by more than 9 dB, and by at least 6 dB more than a 500 Hz tone. With simple panning, the far ear must still get a 200 Hz tone at -5 to -14 dB at the side. Removing either feature makes its test fail; without the cues, the back measured 6 dB brighter than the front.
 - **Presets** must set the sliders and highlight correctly. **Settings** must survive a reload. **Bass boost** must lift 55 Hz by more than 9 dB relative to the voice.
 
 **Android:** builds debug and release APKs, runs lint, then boots an Android 15 emulator and runs `tests/android/smoke.mjs` against the debug APK:
@@ -110,9 +113,11 @@ Analysing a 4-minute song takes about 1.2 s on a desktop. Live 8D doesn't follow
 Then, for the part that orbits:
 
 1. The song is summed to mono.
-2. A `PannerNode` places it in 3D space. Two oscillators drive its X and Z position (`sin` and `-cos`), so the source moves in a circle around the listener: front → right → behind → left.
-3. A generated impulse response feeds a `ConvolverNode` to add reverb.
-4. For export, the same graph is rendered in an `OfflineAudioContext`, peak-normalised, then encoded as 16-bit WAV or as MP3 with [lamejs](https://github.com/zhuker/lamejs). The encoder is loaded only on the first MP3 export. Encoding runs in chunks so the page stays responsive.
+2. A `PannerNode` places it in 3D space. Two oscillators drive its X and Z position (`sin` and `-cos`), so the source moves in a circle around the listener: front → right → behind → left. With Follow the music, the motion track drives the position instead.
+3. **Behind-the-head cues.** Through headphones, front and back sound alike, so a plain circle is heard as a left-right swing. Measured on the export, the browser's generic HRTF even made the back about 6 dB *brighter* at 8 kHz than the front, which is the opposite of real hearing. The front/back position therefore also drives a low-pass filter (18.5 kHz in front, 3.5 kHz behind) and a 3 dB level dip behind. Now 8 kHz drops by more than 9 dB from front to back, while 500 Hz barely changes.
+4. **Crossfeed, simple panning only.** With 3D mode off, a little of each side's bass (below about 700 Hz, -9 dB, 0.3 ms later) reaches the other ear, so nothing sits entirely in one ear. It is off in 3D mode: HRTF output already contains the far-ear signal, and adding a second copy made them interfere, putting some pitches on the wrong side.
+5. A generated impulse response feeds a `ConvolverNode` to add reverb.
+6. For export, the same graph is rendered in an `OfflineAudioContext`, peak-normalised, then encoded as 16-bit WAV or as MP3 with [lamejs](https://github.com/zhuker/lamejs). The encoder is loaded only on the first MP3 export. Encoding runs in chunks so the page stays responsive.
 
 ## Limitations
 

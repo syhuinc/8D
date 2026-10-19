@@ -95,6 +95,33 @@ function makeImpulse(ctx, seconds, decay, channels = 2) {
   return ir;
 }
 
+const CROSSFEED = 0.35; // about -9 dB
+
+/**
+ * Headphone crossfeed for simple left/right panning: a little of each side's
+ * low end (below ~700 Hz, 0.3 ms later) leaks into the other ear, as it would
+ * from speakers, so the sound never sits entirely in one ear.
+ * Not for HRTF: binaural output already contains the far-ear signal, and
+ * adding a second copy makes them interfere (at some pitches the sound then
+ * appears on the wrong side; the tests caught this).
+ * Returns the output node; `bleed` holds the two gains to switch it.
+ */
+function crossfeed(ctx, source, amount) {
+  const split = new ChannelSplitterNode(ctx, { numberOfOutputs: 2 });
+  const merge = new ChannelMergerNode(ctx, { numberOfInputs: 2 });
+  merge.bleed = [];
+  source.connect(split);
+  for (const [from, to] of [[0, 1], [1, 0]]) {
+    split.connect(merge, from, from); // direct
+    const filter = new BiquadFilterNode(ctx, { type: 'lowpass', frequency: 700, Q: 0.5 });
+    const level = new GainNode(ctx, { gain: amount });
+    split.connect(filter, from);
+    filter.connect(new DelayNode(ctx, { delayTime: 0.0003 })).connect(level).connect(merge, 0, to);
+    merge.bleed.push(level);
+  }
+  return merge;
+}
+
 function buildGraph(ctx, p) {
   const input = new GainNode(ctx);
 
@@ -116,9 +143,13 @@ function buildGraph(ctx, p) {
   const gainX = new GainNode(ctx, { gain: auto ? 0 : 1 });
   const gainZ = new GainNode(ctx, { gain: auto ? 0 : -1 });
   const gainY = new GainNode(ctx, { gain: auto ? 0 : p.height });
+  // z (front -1 .. back +1) from either source is summed here: it positions the
+  // panner and also drives the behind-the-head cues below.
+  const zBus = new GainNode(ctx);
   oscX.connect(gainX).connect(panner.positionX);
-  oscZ.connect(gainZ).connect(panner.positionZ);
+  oscZ.connect(gainZ).connect(zBus);
   oscY.connect(gainY).connect(panner.positionY);
+  zBus.connect(panner.positionZ);
 
   // "Follow the music": a 3-channel motion track (x, y, z; see auto.js)
   // drives the position instead, while the oscillators are muted.
@@ -126,12 +157,22 @@ function buildGraph(ctx, p) {
   const motionY = new GainNode(ctx, { gain: auto ? p.height : 0 });
   motionIn.connect(panner.positionX, 0);
   motionIn.connect(motionY, 1).connect(panner.positionY);
-  motionIn.connect(panner.positionZ, 2);
+  motionIn.connect(zBus, 2);
 
   const spatial = new GainNode(ctx, { gain: p.strength });
   const original = new GainNode(ctx, { gain: 1 - p.strength });
   const bus = new GainNode(ctx);
-  input.connect(mono).connect(panner).connect(spatial).connect(bus);
+  // Through headphones front and back sound alike, so a circle is heard as a
+  // left-right swing. Real 8D mixes fix that with distance cues: behind the
+  // head the sound gets muffled and a little quieter. The filter opens to
+  // 18.5 kHz in front and closes to 3.5 kHz behind; the level dips 3 dB.
+  const behindFilter = new BiquadFilterNode(ctx, { type: 'lowpass', frequency: 11000, Q: 0.5 });
+  zBus.connect(new GainNode(ctx, { gain: -7500 })).connect(behindFilter.frequency);
+  const behindLevel = new GainNode(ctx, { gain: 0.85 });
+  zBus.connect(new GainNode(ctx, { gain: -0.15 })).connect(behindLevel.gain);
+  input.connect(mono).connect(panner).connect(behindFilter).connect(behindLevel);
+  const crossed = crossfeed(ctx, behindLevel, p.hrtf ? 0 : CROSSFEED);
+  crossed.connect(spatial).connect(bus);
   input.connect(original).connect(bus);
 
   // Vocals mode: the centre track plays in sync with the song. It is
@@ -160,7 +201,7 @@ function buildGraph(ctx, p) {
   vocal.connect(new ConvolverNode(ctx, { buffer: makeImpulse(ctx, 2.8, 2.5, 1) })).connect(vocalWet).connect(master);
 
   return {
-    input, vocalIn, motionIn, panner, oscillators: [oscX, oscZ, oscY], gainX, gainZ, gainY, motionY, spatial, vocal, original, dry, wet, vocalDry, vocalWet, bass,
+    input, vocalIn, motionIn, panner, oscillators: [oscX, oscZ, oscY], gainX, gainZ, gainY, motionY, spatial, vocal, original, dry, wet, vocalDry, vocalWet, bass, bleed: crossed.bleed,
     start(when) { this.oscillators.forEach((o) => o.start(when)); },
   };
 }
@@ -209,6 +250,7 @@ function applyParams() {
   smooth(g.vocalWet.gain, params.reverb);
   smooth(g.bass.gain, params.bass);
   g.panner.panningModel = params.hrtf ? 'HRTF' : 'equalpower';
+  for (const level of g.bleed) smooth(level.gain, params.hrtf ? 0 : CROSSFEED);
 }
 
 // ---------- playback ----------

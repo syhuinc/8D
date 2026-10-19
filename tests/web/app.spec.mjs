@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { readFile, writeFile } from 'node:fs/promises';
-import { makeWav, makeMix, makeBeat, MIX, analyseInPage, placementInPage, levelsInPage, orbitIsCorrect, orbitPeriodInPage } from '../fixtures.mjs';
+import { makeWav, makeMix, makeBeat, makeTones, MIX, analyseInPage, placementInPage, levelsInPage, orbitIsCorrect, orbitPeriodInPage, earLevelsInPage } from '../fixtures.mjs';
 
 const song = (name = 'song.wav', opts) => ({ name, mimeType: 'audio/wav', buffer: makeWav(opts) });
 
@@ -351,4 +351,36 @@ test('follow the music: the orbit turns faster in the loud half than in the quie
   // Quiet half: half speed (9.6 s); loud half: double speed (2.4 s).
   expect(Math.abs(quiet - 9.6), `quiet ${quiet} s, loud ${loud} s`).toBeLessThan(0.5);
   expect(Math.abs(loud - 2.4), `quiet ${quiet} s, loud ${loud} s`).toBeLessThan(0.3);
+});
+
+// 3D cues: a circle, not a left-right swing
+async function exportTones(page, { hrtf = true, freqs }) {
+  await page.goto('');
+  await loadSong(page, { name: 'tones.wav', mimeType: 'audio/wav', buffer: makeTones({ freqs, seconds: 10 }) });
+  await page.setChecked('#vocals', false); // mono test tones: let them all orbit
+  await page.setChecked('#auto', false);   // fixed 8 s orbit: front at 0 s, right at 2 s, back at 4 s
+  await page.setChecked('#hrtf', hrtf);
+  await setSlider(page, 'reverb', 0);
+  return (await exportAndDownload(page, 'wav')).bytes;
+}
+const both = (e) => 10 * Math.log10(10 ** (e.left / 10) + 10 ** (e.right / 10));
+
+test('3D cues: behind the head the sound is muffled (treble drops much more than bass)', async ({ page }) => {
+  const bytes = await exportTones(page, { freqs: [500, 8000] });
+  const change = {};
+  for (const f of [500, 8000]) {
+    const front = both(await earLevelsInPage(page, bytes, f, 7.6, 8.4)); // second pass through the front
+    const back = both(await earLevelsInPage(page, bytes, f, 3.6, 4.4));
+    change[f] = front - back;
+  }
+  expect(change[8000], `front-to-back drop: 8 kHz ${change[8000].toFixed(1)} dB, 500 Hz ${change[500].toFixed(1)} dB`).toBeGreaterThan(9);
+  expect(change[8000] - change[500]).toBeGreaterThan(6);
+});
+
+test('3D cues: with simple panning, the far ear still hears the bass (crossfeed)', async ({ page }) => {
+  const bytes = await exportTones(page, { hrtf: false, freqs: [200] });
+  const side = await earLevelsInPage(page, bytes, 200, 1.8, 2.2); // sound at the right
+  const farEar = side.left - side.right;
+  expect(farEar, `far ear ${farEar.toFixed(1)} dB`).toBeGreaterThan(-14);
+  expect(farEar).toBeLessThan(-5);
 });

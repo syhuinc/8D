@@ -148,12 +148,18 @@ public class LiveService extends Service {
         double angle = 2 * Math.PI * ((now - startedAt) / 1e9) / period; // 0 = front, then right, back, left
         double x = Math.sin(angle);  // +1 right, -1 left
         double z = Math.cos(angle);  // +1 front, -1 back
-        float ild = (float) (16 * depth);   // level difference at the sides (dB)
-        float shadow = (float) (9 * depth); // treble cut in the far ear at the sides (dB)
-        float back = (float) (6 * depth * Math.max(0, -z)); // duller behind the head
-        float leftGain = (float) (-ild * Math.max(0, x)), rightGain = (float) (-ild * Math.max(0, -x));
-        float leftTreble = (float) (-shadow * Math.max(0, x)) - back;
-        float rightTreble = (float) (-shadow * Math.max(0, -x)) - back;
+        // Per-ear volume alone sounds like a left-right swing, so the circle is
+        // made audible with front/back contrast: clear and slightly bright in
+        // front, muffled and a little quieter behind. The sides stay moderate
+        // (12 dB) so the sound never feels stuck in one ear.
+        float ild = (float) (12 * depth);    // level difference at the sides (dB)
+        float shadow = (float) (8 * depth);  // treble cut in the far ear at the sides (dB)
+        float behind = (float) Math.max(0, -z), ahead = (float) Math.max(0, z);
+        float treble = (float) (depth * (2 * ahead - 10 * behind)); // brighter in front, muffled behind
+        float level = (float) (-2.5 * depth * behind);             // a little quieter behind
+        float leftGain = (float) (-ild * Math.max(0, x)) + level, rightGain = (float) (-ild * Math.max(0, -x)) + level;
+        float leftTreble = (float) (-shadow * Math.max(0, x)) + treble;
+        float rightTreble = (float) (-shadow * Math.max(0, -x)) + treble;
         for (Integer session : sessions.keySet().toArray(new Integer[0])) {
             DynamicsProcessing dp = sessions.get(session).effect;
             try {
