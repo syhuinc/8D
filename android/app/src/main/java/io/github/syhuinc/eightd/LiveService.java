@@ -275,9 +275,13 @@ public class LiveService extends Service {
         }
         try {
             Visualizer v = new Visualizer(a.session);
-            v.setCaptureSize(Visualizer.getCaptureSizeRange()[1]);
-            v.setScalingMode(Visualizer.SCALING_MODE_AS_PLAYED);
-            v.setEnabled(true);
+            // If another app already runs a visualizer on this session (say the music
+            // app's own), ours shares it and comes back enabled: keep its settings then.
+            if (!v.getEnabled()) {
+                v.setCaptureSize(Visualizer.getCaptureSizeRange()[1]);
+                v.setScalingMode(Visualizer.SCALING_MODE_AS_PLAYED);
+                v.setEnabled(true);
+            }
             a.ears = v;
             a.fft = new byte[v.getCaptureSize()];
             heardAt = System.nanoTime();
@@ -306,7 +310,7 @@ public class LiveService extends Service {
                 for (int k = 1; k < a.fft.length / 2; k++) {
                     double re = a.fft[2 * k], im = a.fft[2 * k + 1], power = re * re + im * im;
                     all += power;
-                    if (k * binHz <= 160) bass += power; // kick and bass line
+                    if (k == 1 || k * binHz <= 160) bass += power; // kick and bass line
                 }
                 who = a.packageName;
             } catch (RuntimeException e) {
