@@ -147,5 +147,5 @@ const Vocals = (() => {
     return out;
   }
 
-  return { extractCenter };
+  return { extractCenter, makeFft };
 })();

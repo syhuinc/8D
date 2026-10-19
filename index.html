@@ -55,6 +55,8 @@
         <label for="period">Orbit time <output id="periodOut"></output></label>
         <input id="period" type="range" min="2" max="20" step="0.5" value="8">
       </div>
+      <label class="check vocals"><input id="auto" type="checkbox" checked> Follow the music (sync to the beat, faster in loud parts)</label>
+      <p id="autoNote" class="hint"></p>
       <div class="ctl">
         <label for="strength">Effect strength <output id="strengthOut"></output></label>
         <input id="strength" type="range" min="0" max="100" value="100">
@@ -100,6 +102,7 @@
     </footer>
   </main>
   <script src="vocals.js"></script>
+  <script src="auto.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

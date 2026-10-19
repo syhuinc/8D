@@ -15,6 +15,7 @@ const params = {
   height: 0,      // vertical wobble amount
   hrtf: true,
   vocals: true,   // keep the centre (vocal) track still while the rest orbits
+  auto: true,     // follow the music: beat-synced orbit, faster in loud parts (auto.js)
   vocalFocus: 0.5, // vocal strictness, see Vocals.extractCenter
   bass: 0,        // low-shelf boost in dB
   format: 'mp3-192',
@@ -33,7 +34,7 @@ const PRESETS = {
 // through its bridge (SharedPreferences), otherwise in localStorage. Storage
 // can be unavailable (private mode, blocked storage), so every access is guarded.
 const SETTINGS_KEY = '8d-converter.settings';
-const SAVED = ['period', 'strength', 'reverb', 'height', 'bass', 'hrtf', 'vocals', 'vocalFocus', 'format'];
+const SAVED = ['period', 'strength', 'reverb', 'height', 'bass', 'hrtf', 'vocals', 'vocalFocus', 'format', 'auto'];
 
 function loadSettings() {
   try {
@@ -68,6 +69,11 @@ const state = {
   vocalSource: null,
   vocalJob: 0,
   separating: false,
+  analysis: null,     // beat and loudness of the current song (auto.js)
+  motionAngles: null, // planned orbit angle over time, for the orbit view
+  motionBuffer: null, // the planned sound position, played in sync with the song
+  motionSource: null,
+  analysing: false,
 };
 
 // ---------- audio graph ----------
@@ -105,11 +111,22 @@ function buildGraph(ctx, p) {
   const oscZ = new OscillatorNode(ctx, { periodicWave: cosineWave(ctx), frequency: freq });
   const oscY = new OscillatorNode(ctx, { type: 'sine', frequency: freq / 2 });
   // Listener faces -Z, so Z = -cos starts the sound in front and moves it clockwise.
-  const gainZ = new GainNode(ctx, { gain: -1 });
-  const gainY = new GainNode(ctx, { gain: p.height });
-  oscX.connect(panner.positionX);
+  // Start in the right mode: an export builds a fresh graph and never sees applyParams.
+  const auto = autoActive();
+  const gainX = new GainNode(ctx, { gain: auto ? 0 : 1 });
+  const gainZ = new GainNode(ctx, { gain: auto ? 0 : -1 });
+  const gainY = new GainNode(ctx, { gain: auto ? 0 : p.height });
+  oscX.connect(gainX).connect(panner.positionX);
   oscZ.connect(gainZ).connect(panner.positionZ);
   oscY.connect(gainY).connect(panner.positionY);
+
+  // "Follow the music": a 3-channel motion track (x, y, z; see auto.js)
+  // drives the position instead, while the oscillators are muted.
+  const motionIn = new ChannelSplitterNode(ctx, { numberOfOutputs: 3 });
+  const motionY = new GainNode(ctx, { gain: auto ? p.height : 0 });
+  motionIn.connect(panner.positionX, 0);
+  motionIn.connect(motionY, 1).connect(panner.positionY);
+  motionIn.connect(panner.positionZ, 2);
 
   const spatial = new GainNode(ctx, { gain: p.strength });
   const original = new GainNode(ctx, { gain: 1 - p.strength });
@@ -143,7 +160,7 @@ function buildGraph(ctx, p) {
   vocal.connect(new ConvolverNode(ctx, { buffer: makeImpulse(ctx, 2.8, 2.5, 1) })).connect(vocalWet).connect(master);
 
   return {
-    input, vocalIn, panner, oscillators: [oscX, oscZ, oscY], gainY, spatial, vocal, original, dry, wet, vocalDry, vocalWet, bass,
+    input, vocalIn, motionIn, panner, oscillators: [oscX, oscZ, oscY], gainX, gainZ, gainY, motionY, spatial, vocal, original, dry, wet, vocalDry, vocalWet, bass,
     start(when) { this.oscillators.forEach((o) => o.start(when)); },
   };
 }
@@ -178,7 +195,11 @@ function applyParams() {
     g.oscillators[1].frequency.setValueAtTime(freq, t);
     g.oscillators[2].frequency.setValueAtTime(freq / 2, t);
   }
-  smooth(g.gainY.gain, params.height);
+  const auto = autoActive();
+  smooth(g.gainX.gain, auto ? 0 : 1);
+  smooth(g.gainZ.gain, auto ? 0 : -1);
+  smooth(g.gainY.gain, auto ? 0 : params.height);
+  smooth(g.motionY.gain, auto ? params.height : 0);
   smooth(g.spatial.gain, params.strength);
   smooth(g.vocal.gain, params.strength);
   smooth(g.original.gain, 1 - params.strength);
@@ -219,18 +240,24 @@ function startSource(offset) {
     state.vocalSource.connect(state.graph.vocalIn);
     state.vocalSource.start(ctx.currentTime, offset); // same instant as the song: sample-aligned
   }
+  if (autoActive()) {
+    state.motionSource = new AudioBufferSourceNode(ctx, { buffer: state.motionBuffer });
+    state.motionSource.connect(state.graph.motionIn);
+    state.motionSource.start(ctx.currentTime, offset);
+  }
 }
 
 function stopSource() {
   if (!state.source) return;
   state.sourceToken++;
-  for (const src of [state.source, state.vocalSource]) {
+  for (const src of [state.source, state.vocalSource, state.motionSource]) {
     if (!src) continue;
     try { src.stop(); } catch (_) { /* already stopped */ }
     src.disconnect();
   }
   state.source = null;
   state.vocalSource = null;
+  state.motionSource = null;
 }
 
 async function play() {
@@ -268,6 +295,9 @@ async function loadFile(file) {
     stopSource();
     state.buffer = buffer;
     state.vocalBuffer = null;
+    state.analysis = null;
+    state.motionAngles = null;
+    state.motionBuffer = null;
     state.fileName = file.name.replace(/\.[^.]+$/, '') || 'song';
     state.offset = 0;
     $('dropTitle').textContent = file.name;
@@ -276,11 +306,55 @@ async function loadFile(file) {
     $('dur').textContent = fmt(buffer.duration);
     setStatus('');
     render();
+    await prepareAuto();
     if (params.vocals) await prepareVocals();
   } catch (err) {
     console.error(err);
     setStatus("Couldn't read that file. Your browser may not support this audio format — try MP3 or WAV.");
   }
+}
+
+// ---------- follow the music (auto.js) ----------
+
+function autoActive() {
+  return params.auto && !!state.motionBuffer;
+}
+
+/** Analyse the current song's beat and loudness (once), then plan the orbit. */
+async function prepareAuto() {
+  if (!params.auto || !state.buffer) { renderAutoNote(); return; }
+  const buffer = state.buffer;
+  if (!state.analysis) {
+    state.analysing = true;
+    render();
+    try {
+      const analysis = await Auto.analyse(buffer, (f) => setStatus(`Listening to the beat… ${Math.round(f * 100)}%`));
+      if (buffer !== state.buffer) return; // another song was loaded meanwhile
+      state.analysis = analysis;
+      setStatus('');
+    } finally {
+      state.analysing = false;
+    }
+  }
+  planOrbit();
+}
+
+/** (Re)build the orbit from the analysis and the current orbit time. */
+function planOrbit() {
+  const plan = Auto.plan(state.analysis, params.period);
+  state.motionAngles = Auto.angles(plan, state.buffer.duration);
+  state.motionBuffer = Auto.motionBuffer(state.motionAngles, state.buffer.duration);
+  state.autoText = Auto.describe(plan);
+  applyParams();
+  if (state.playing) startSource(position()); // pick up the new orbit right away
+  renderAutoNote();
+  render();
+}
+
+function renderAutoNote() {
+  $('autoNote').textContent = !params.auto ? ''
+    : state.motionBuffer ? state.autoText
+    : 'Load a song: the orbit will sync to its beat and speed up in loud parts.';
 }
 
 // ---------- vocals mode ----------
@@ -386,6 +460,11 @@ async function exportFile() {
       const vocalSrc = new AudioBufferSourceNode(off, { buffer: state.vocalBuffer });
       vocalSrc.connect(g.vocalIn);
       vocalSrc.start(0);
+    }
+    if (autoActive()) {
+      const motionSrc = new AudioBufferSourceNode(off, { buffer: state.motionBuffer });
+      motionSrc.connect(g.motionIn);
+      motionSrc.start(0);
     }
     const rendered = await off.startRendering();
     normalise(rendered, 0.98);
@@ -532,6 +611,7 @@ const fmt = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(
 const setStatus = (msg) => { $('status').textContent = msg; };
 
 function orbitAngle() {
+  if (autoActive()) return Auto.angleAt(state.motionAngles, position());
   if (!state.ctx) return 0;
   const o = state.orbit;
   return o.basePhase + 2 * Math.PI * o.freq * (state.ctx.currentTime - o.baseTime);
@@ -584,8 +664,8 @@ function render() {
     $('cur').textContent = fmt(pos);
     if (!seeking) $('seek').value = String(Math.round((pos / state.buffer.duration) * 1000));
   }
-  $('export').disabled = !state.buffer || state.separating || exporting;
-  $('periodOut').textContent = `${params.period}s per circle`;
+  $('export').disabled = !state.buffer || state.separating || state.analysing || exporting;
+  $('periodOut').textContent = autoActive() ? `target ${params.period}s` : `${params.period}s per circle`;
   $('strengthOut').textContent = `${Math.round(params.strength * 100)}%`;
   $('reverbOut').textContent = `${Math.round(params.reverb * 100)}%`;
   $('heightOut').textContent = `${Math.round(params.height * 100)}%`;
@@ -614,6 +694,7 @@ function syncControls() {
   $('vocalFocus').value = Math.round(params.vocalFocus * 100);
   $('hrtf').checked = params.hrtf;
   $('vocals').checked = params.vocals;
+  $('auto').checked = params.auto;
   $('format').value = params.format;
 }
 
@@ -653,6 +734,16 @@ function bind() {
     $(id).addEventListener('change', saveSettings); // once per drag, on release
   };
   slider('period', 'period', 1);
+  $('period').addEventListener('change', () => { if (autoActive()) planOrbit(); });
+  $('auto').addEventListener('change', async (e) => {
+    params.auto = e.target.checked;
+    saveSettings();
+    if (params.auto) await prepareAuto();
+    applyParams();
+    if (state.playing) startSource(position());
+    renderAutoNote();
+    render();
+  });
   slider('strength', 'strength', 0.01);
   slider('reverb', 'reverb', 0.01);
   slider('height', 'height', 0.01);
@@ -690,6 +781,7 @@ function bind() {
       syncControls();
       applyParams();
       saveSettings();
+      if (autoActive()) planOrbit(); // new orbit time: re-fit it to the beat
       render();
     });
     presets.appendChild(b);

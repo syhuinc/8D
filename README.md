@@ -16,7 +16,8 @@ Open `index.html` in a browser, or host the folder on any static host. For GitHu
 
 | Control | What it does |
 | --- | --- |
-| Orbit time | Seconds per full circle around your head (2–20 s) |
+| Orbit time | Seconds per full circle around your head (2–20 s); with Follow the music, the target that gets fitted to the beat |
+| Follow the music | On by default: one circle takes a whole number of beats and starts in front of you on a beat; it turns twice as fast in loud parts and half as fast in quiet ones (see below) |
 | Effect strength | Blends between the original stereo mix (0%) and fully rotating sound (100%) |
 | Reverb | Adds room sound, which helps the "out of your head" feel |
 | Height wobble | Moves the sound slightly up and down while it circles |
@@ -75,6 +76,7 @@ Without the signing properties the release APK is unsigned, and Android won't in
 - The page must load with no failed requests or errors.
 - A fake Android bridge must receive exactly the bytes a browser download would, and cancelling must be reported.
 - **Vocals mode:** a synthetic stereo song (centred voice, left-leaning guitar, right-leaning piano) is exported, and each instrument's pitch is measured per ear, per second. The voice must stay balanced while guitar and piano orbit. With the mode off, the voice must orbit too, which shows the measurement can tell the difference. Mono songs must show the "can't separate" note. A slightly off-centre synth must stay in the middle on "loose" and orbit on "strict".
+- **Follow the music:** tempo detection must be accurate to 0.3 BPM on drum tracks (0.5 with heavy noise) and must reject plain noise. The exported orbit of a 100 BPM track must measure 9.6 s (16 beats) with the feature on and 8 s with it off. A track with a quiet half and a loud half must orbit at 9.6 s and 2.4 s respectively, with the target set to 4 s. Orbit lengths are measured from the exported audio.
 - **Presets** must set the sliders and highlight correctly. **Settings** must survive a reload. **Bass boost** must lift 55 Hz by more than 9 dB relative to the voice.
 
 **Android:** builds debug and release APKs, runs lint, then boots an Android 15 emulator and runs `tests/android/smoke.mjs` against the debug APK:
@@ -94,6 +96,16 @@ WebView debugging, which the Android test relies on, is only switched on in debu
 ## How it works
 
 **Vocals mode** (`vocals.js`): lead vocals are almost always mixed dead-centre, identical in both channels. The song is analysed in short overlapping slices (2048-point FFT, 75% overlap). In each slice and frequency bin, left and right are compared for level and phase. Bins that match, inside the vocal range (about 150 Hz to 9 kHz, with soft edges), form a mono "centre" track. During playback and export that track plays in sync with the song. It goes straight to the middle with its own mono reverb, so sung notes don't drift, and it is subtracted from what orbits, so nothing is doubled or lost. Bass below the vocal range and cymbals above it keep orbiting. Separation takes about 1.6 s per minute of audio on a desktop; phones are slower.
+
+**Follow the music** (`auto.js`) works like this:
+- **Onsets.** The song is analysed in 1024-point frames. Onsets are the rise in loudness across 12 log-spaced bands, from 30 Hz to 10 kHz. Bands rather than FFT bins keep random noise from swamping the drums.
+- **Tempo.** Found by autocorrelating the onsets between 70 and 180 BPM, with a mild preference for 90–150. It is refined using the peaks 2, 4 and 8 beats apart, so a 4-minute song stays on the beat.
+- **Confidence.** The onset pattern's average correlation with itself shifted by 1–4 beats. Plain noise scores about 0.0–0.05; test beats, even buried in heavy noise, score 0.29–0.86. Below 0.15 there is no beat sync: the circle keeps your orbit time and only follows the loudness.
+- **Circle length.** One circle is the number of beats (4, 8, 16, 32 or 64) closest to your orbit time.
+- **Loudness.** Measured per second and smoothed over about 4 s. Bar by bar, the top 30% of the song's range turns twice as fast and the bottom 30% half as fast. Songs with less than 4 dB of variation keep a steady speed.
+- **Playback.** The result is a motion track (x/y/z position over time) that plays in sync with the song, like the vocal track, so preview, seeking and export match.
+
+Analysing a 4-minute song takes about 1.2 s on a desktop. Live 8D doesn't follow the music: it never receives the audio, only the ability to adjust it.
 
 Then, for the part that orbits:
 

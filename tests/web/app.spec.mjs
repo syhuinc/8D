@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { readFile, writeFile } from 'node:fs/promises';
-import { makeWav, makeMix, MIX, analyseInPage, placementInPage, levelsInPage, orbitIsCorrect } from '../fixtures.mjs';
+import { makeWav, makeMix, makeBeat, MIX, analyseInPage, placementInPage, levelsInPage, orbitIsCorrect, orbitPeriodInPage } from '../fixtures.mjs';
 
 const song = (name = 'song.wav', opts) => ({ name, mimeType: 'audio/wav', buffer: makeWav(opts) });
 
@@ -280,4 +280,75 @@ test('live 8D card: in the app, starts and stops live mode and shows which apps 
   await expect(page.locator('#liveStatus')).toHaveText('On: Spotify, org.example.player');
   await page.click('#liveToggle');
   await expect(page.locator('#liveStatus')).toHaveText('Off');
+});
+
+// Follow the music (auto.js)
+const beatFile = (opts) => ({ name: 'beat.wav', mimeType: 'audio/wav', buffer: makeBeat(opts) });
+
+test('follow the music: tempo detection is accurate and rejects noise', async ({ page }) => {
+  await page.goto('');
+  const r = await page.evaluate(async () => {
+    const sr = 44100;
+    let seed = 5;
+    const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296) * 2 - 1;
+    const make = (seconds, fill) => {
+      const B = new AudioBuffer({ numberOfChannels: 2, length: seconds * sr, sampleRate: sr });
+      const L = B.getChannelData(0), R = B.getChannelData(1);
+      for (let i = 0; i < L.length; i++) { const v = fill(i / sr); L[i] = v; R[i] = v; }
+      return B;
+    };
+    const drums = (bpm, noise) => make(30, (t) => {
+      const beat = 60 / bpm, ph = t % beat, half = t % (beat / 2);
+      const kick = (Math.floor(t / beat) % 2 === 0 ? 1 : 0.5) * Math.exp(-ph * 25) * Math.sin(2 * Math.PI * 55 * ph);
+      return 0.5 * kick + 0.25 * Math.exp(-half * 120) * rnd() + 0.15 * Math.sin(2 * Math.PI * 220 * t) + noise * rnd();
+    });
+    const out = {};
+    for (const [name, buf] of [['128', drums(128, 0)], ['95', drums(95, 0)], ['swing100noisy', drums(100, 0.3)],
+      ['noise', make(20, (t) => 0.3 * Math.sin(2 * Math.PI * 440 * t) + 0.1 * rnd())]]) {
+      const a = await Auto.analyse(buf);
+      out[name] = Auto.plan(a, 8);
+    }
+    return out;
+  });
+  expect(r['128'].synced).toBe(true);
+  expect(Math.abs(r['128'].bpm - 128)).toBeLessThan(0.3);
+  expect(Math.abs(r['95'].bpm - 95)).toBeLessThan(0.3);
+  expect(r.swing100noisy.synced).toBe(true);
+  expect(Math.abs(r.swing100noisy.bpm - 100)).toBeLessThan(0.5);
+  expect(r.noise.synced).toBe(false); // no beat: keep the user's orbit time
+  expect(r.noise.base).toBe(8);
+});
+
+test('follow the music: the exported orbit is 16 beats long (9.6 s at 100 BPM); off, it is 8 s', async ({ browser }) => {
+  const periods = {};
+  for (const auto of [true, false]) {
+    const page = await browser.newPage();
+    await page.goto('');
+    await loadSong(page, beatFile({ bpm: 100, seconds: 40 }));
+    await page.setChecked('#vocals', false); // mono test track: let it all orbit
+    await page.setChecked('#auto', auto);
+    if (auto) await expect(page.locator('#autoNote')).toContainText('100 BPM: one circle every 16 beats');
+    await setSlider(page, 'reverb', 0);
+    const { bytes } = await exportAndDownload(page, 'wav');
+    periods[auto ? 'on' : 'off'] = await orbitPeriodInPage(page, bytes, 700, 1, 39);
+    await page.close();
+  }
+  expect(Math.abs(periods.on - 9.6), `follow the music: ${periods.on} s`).toBeLessThan(0.3);
+  expect(Math.abs(periods.off - 8), `fixed orbit: ${periods.off} s`).toBeLessThan(0.3);
+});
+
+test('follow the music: the orbit turns faster in the loud half than in the quiet half', async ({ page }) => {
+  await page.goto('');
+  await loadSong(page, beatFile({ bpm: 100, seconds: 60, quietFirstHalf: true }));
+  await page.setChecked('#vocals', false);
+  await expect(page.locator('#autoNote')).toContainText('faster in loud parts');
+  await setSlider(page, 'reverb', 0);
+  await setSlider(page, 'period', 4); // target 4 s -> 8 beats = 4.8 s, so each half holds several circles
+  await expect(page.locator('#autoNote')).toContainText('every 8 beats (4.8 s)');
+  const { bytes } = await exportAndDownload(page, 'wav');
+  const quiet = await orbitPeriodInPage(page, bytes, 700, 1, 28);
+  const loud = await orbitPeriodInPage(page, bytes, 700, 33, 59);
+  // Quiet half: half speed (9.6 s); loud half: double speed (2.4 s).
+  expect(Math.abs(quiet - 9.6), `quiet ${quiet} s, loud ${loud} s`).toBeLessThan(0.5);
+  expect(Math.abs(loud - 2.4), `quiet ${quiet} s, loud ${loud} s`).toBeLessThan(0.3);
 });
