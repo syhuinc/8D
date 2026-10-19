@@ -13,4 +13,4 @@ dependencyResolutionManagement {
     }
 }
 rootProject.name = '8D Converter'
-include ':app'
+include ':app', ':testplayer'

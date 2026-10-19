@@ -273,7 +273,6 @@ async function loadFile(file) {
     $('dropTitle').textContent = file.name;
     $('dropHint').textContent = 'Tap to choose a different song';
     $('player').hidden = false;
-    $('controls').hidden = false;
     $('dur').textContent = fmt(buffer.duration);
     setStatus('');
     render();
@@ -321,6 +320,43 @@ function isMono(left, right) {
     mid += (left[i] + right[i]) ** 2;
   }
   return side < mid * 1e-4;
+}
+
+// ---------- live 8D (Android app only) ----------
+
+// Friendly names for common music apps; anything else shows its package name.
+const APP_NAMES = {
+  'com.spotify.music': 'Spotify', 'com.google.android.apps.youtube.music': 'YouTube Music',
+  'com.google.android.youtube': 'YouTube', 'deezer.android.app': 'Deezer',
+  'com.amazon.mp3': 'Amazon Music', 'com.soundcloud.android': 'SoundCloud',
+  'com.maxmpz.audioplayer': 'Poweramp', 'com.apple.android.music': 'Apple Music',
+};
+
+function liveAvailable() {
+  try { return !!(window.Android8D && Android8D.liveSupported && Android8D.liveSupported()); } catch (_) { return false; }
+}
+
+function renderLive() {
+  let status;
+  try { status = JSON.parse(Android8D.liveStatus()); } catch (_) { return; }
+  $('liveToggle').textContent = status.running ? 'Stop live 8D' : 'Start live 8D';
+  $('liveToggle').setAttribute('aria-pressed', String(status.running));
+  $('liveStatus').textContent = !status.running ? 'Off'
+    : status.apps.length ? `On: ${status.apps.map((p) => APP_NAMES[p] || p).join(', ')}`
+    : 'On: now press play in your music app';
+}
+
+function bindLive() {
+  if (!liveAvailable()) return;
+  $('live').hidden = false;
+  $('liveToggle').addEventListener('click', () => {
+    let running = false;
+    try { running = JSON.parse(Android8D.liveStatus()).running; } catch (_) { /* treat as off */ }
+    if (running) Android8D.liveStop(); else Android8D.liveStart();
+    setTimeout(renderLive, 300);
+  });
+  renderLive();
+  setInterval(renderLive, 1000);
 }
 
 // ---------- export ----------
@@ -548,7 +584,7 @@ function render() {
     $('cur').textContent = fmt(pos);
     if (!seeking) $('seek').value = String(Math.round((pos / state.buffer.duration) * 1000));
   }
-  $('export').disabled = state.separating || exporting;
+  $('export').disabled = !state.buffer || state.separating || exporting;
   $('periodOut').textContent = `${params.period}s per circle`;
   $('strengthOut').textContent = `${Math.round(params.strength * 100)}%`;
   $('reverbOut').textContent = `${Math.round(params.reverb * 100)}%`;
@@ -663,6 +699,7 @@ function bind() {
 
   loadSettings();
   syncControls();
+  bindLive();
 
   const tick = () => { if (state.playing) render(); requestAnimationFrame(tick); };
   requestAnimationFrame(tick);

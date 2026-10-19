@@ -47,7 +47,7 @@ jobs:
 
       - name: Build APKs and run lint
         working-directory: android
-        run: ./gradlew --no-daemon assembleDebug assembleRelease lintRelease
+        run: ./gradlew --no-daemon :app:assembleDebug :app:assembleRelease :app:lintRelease :testplayer:assembleDebug
 
       - uses: actions/upload-artifact@v4
         with:
@@ -75,7 +75,7 @@ jobs:
           disable-animations: true
           # Audio stays enabled (no -no-audio) so playback can be tested.
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-boot-anim -camera-back none
-          script: node tests/android/smoke.mjs android/app/build/outputs/apk/debug/app-debug.apk
+          script: node tests/android/smoke.mjs android/app/build/outputs/apk/debug/app-debug.apk android/testplayer/build/outputs/apk/debug/testplayer-debug.apk
 
       - uses: actions/upload-artifact@v4
         if: always()

@@ -10,7 +10,8 @@ import { makeMix, MIX, placementInPage, orbitIsCorrect } from '../fixtures.mjs';
 const PKG = 'io.github.syhuinc.eightd';
 const OUT = 'test-results/android';
 const apk = process.argv[2];
-if (!apk) throw new Error('usage: node tests/android/smoke.mjs <debug apk>');
+const testPlayerApk = process.argv[3]; // optional: android/testplayer debug APK, for the live 8D step
+if (!apk) throw new Error('usage: node tests/android/smoke.mjs <debug apk> [testplayer apk]');
 
 // Screen inspection goes through plain adb tools (dumpsys / uiautomator / input)
 // rather than Playwright's Android selector driver, which holds the single
@@ -230,6 +231,60 @@ async function main() {
     await sleep(1000);
     await device.screenshot({ path: `${OUT}/dark-launch.png` });
     await device.shell('cmd uimode night no');
+  });
+
+  /** Test player's per-0.25 s output levels (dB) of its left (440 Hz) and right (660 Hz) tones. */
+  async function playerLevels() {
+    const log = (await device.shell('logcat -d -s TESTPLAYER:I')).toString();
+    return [...log.matchAll(/level t=([\d.]+) left440=(-?[\d.]+) right660=(-?[\d.]+)/g)]
+      .map((m) => ({ t: +m[1], l: +m[2], r: +m[3] }));
+  }
+  const swing = (xs) => Math.max(...xs) - Math.min(...xs);
+  function correlation(a, b) {
+    const ma = a.reduce((x, y) => x + y) / a.length, mb = b.reduce((x, y) => x + y) / b.length;
+    let sab = 0, saa = 0, sbb = 0;
+    for (let i = 0; i < a.length; i++) { sab += (a[i] - ma) * (b[i] - mb); saa += (a[i] - ma) ** 2; sbb += (b[i] - mb) ** 2; }
+    return sab / Math.sqrt(saa * sbb + 1e-12);
+  }
+
+  if (testPlayerApk) await step("live 8D moves another app's sound between the ears, and stops cleanly", async () => {
+    await launch();
+    await page.evaluate(() => Android8D.liveStart());
+    await page.waitForFunction(() => JSON.parse(Android8D.liveStatus()).running, null, { timeout: 15_000 });
+    await device.installApk(testPlayerApk);
+    await device.shell('pm grant io.github.syhuinc.eightd.testplayer android.permission.RECORD_AUDIO');
+    await device.shell('logcat -c');
+    await device.shell('am start -W -n io.github.syhuinc.eightd.testplayer/.PlayerActivity');
+    await sleep(2000);
+    const status = JSON.parse(await page.evaluate(() => Android8D.liveStatus()));
+    console.log(`  live status: ${JSON.stringify(status)}`);
+    assert.ok(status.apps.includes('io.github.syhuinc.eightd.testplayer'), 'live mode did not attach to the player');
+
+    await device.shell('logcat -c');
+    await sleep(16_500); // two circles at 8 s each
+    const on = await playerLevels();
+    const perSecond = [];
+    for (let s = 0; s < 16; s++) {
+      const w = on.filter((x) => x.t >= on[0].t + s && x.t < on[0].t + s + 1);
+      if (w.length) perSecond.push(`${(w.reduce((a, x) => a + x.l, 0) / w.length).toFixed(0)}/${(w.reduce((a, x) => a + x.r, 0) / w.length).toFixed(0)}`);
+    }
+    const onSwing = [swing(on.map((x) => x.l)), swing(on.map((x) => x.r))];
+    const corr = correlation(on.map((x) => x.l), on.map((x) => x.r));
+    console.log(`  live on: ${on.length} readings; left/right dB per second: ${perSecond.join(' ')}`);
+    console.log(`  live on: swing left ${onSwing[0].toFixed(1)} dB, right ${onSwing[1].toFixed(1)} dB, correlation ${corr.toFixed(2)}`);
+    assert.ok(on.length >= 40, 'too few level readings from the player');
+    assert.ok(onSwing[0] > 8 && onSwing[1] > 8, 'the sound did not move between the ears');
+    assert.ok(corr < -0.3, 'left and right did not move in opposite directions');
+
+    await page.evaluate(() => Android8D.liveStop());
+    await sleep(1500);
+    await device.shell('logcat -c');
+    await sleep(6000);
+    const off = await playerLevels();
+    const offSwing = [swing(off.map((x) => x.l)), swing(off.map((x) => x.r))];
+    console.log(`  live off: swing left ${offSwing[0].toFixed(1)} dB, right ${offSwing[1].toFixed(1)} dB`);
+    assert.ok(offSwing[0] < 3 && offSwing[1] < 3, 'the sound kept moving after live 8D was stopped');
+    assert.equal(JSON.parse(await page.evaluate(() => Android8D.liveStatus())).running, false);
   });
 }
 

@@ -222,6 +222,34 @@ public class MainActivity extends Activity {
             return MainActivity.this.isDarkTheme();
         }
 
+        // Live 8D for other apps (see LiveService). Android 9+ (DynamicsProcessing).
+        @JavascriptInterface
+        public boolean liveSupported() {
+            return Build.VERSION.SDK_INT >= 28;
+        }
+
+        @JavascriptInterface
+        public void liveStart() {
+            if (Build.VERSION.SDK_INT < 28) return;
+            runOnUiThread(() -> {
+                if (Build.VERSION.SDK_INT >= 33
+                        && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                    requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 4); // for the Stop notification
+                }
+                startForegroundService(new Intent(MainActivity.this, LiveService.class));
+            });
+        }
+
+        @JavascriptInterface
+        public void liveStop() {
+            stopService(new Intent(MainActivity.this, LiveService.class));
+        }
+
+        @JavascriptInterface
+        public String liveStatus() {
+            return Build.VERSION.SDK_INT >= 28 ? LiveService.statusJson() : "{\"running\":false,\"apps\":[]}";
+        }
+
         // Remembered settings. SharedPreferences + commit() reach disk right away;
         // WebView localStorage is flushed lazily and lost if the app is killed soon after.
         @JavascriptInterface

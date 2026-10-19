@@ -254,3 +254,30 @@ test('vocal strictness decides whether a slightly off-centre sound stays in the 
   expect(orbitIsCorrect(placement.strict[synth]), `strict, synth: ${placement.strict[synth]}`).toBe(true);
   expect(isCentred(placement.strict[voice]), `strict, voice: ${placement.strict[voice]}`).toBe(true); // the real centre stays
 });
+
+test('live 8D card: hidden on the website', async ({ page }) => {
+  await page.goto('');
+  await expect(page.locator('#live')).toBeHidden();
+});
+
+test('live 8D card: in the app, starts and stops live mode and shows which apps it processes', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.__live = { running: false, apps: [] };
+    window.Android8D = {
+      liveSupported: () => true,
+      liveStatus: () => JSON.stringify(window.__live),
+      liveStart: () => { window.__live.running = true; },
+      liveStop: () => { window.__live = { running: false, apps: [] }; },
+    };
+  });
+  await page.goto('');
+  await expect(page.locator('#live')).toBeVisible();
+  await expect(page.locator('#liveStatus')).toHaveText('Off');
+  await page.click('#liveToggle');
+  await expect(page.locator('#liveStatus')).toHaveText('On: now press play in your music app');
+  await expect(page.locator('#liveToggle')).toHaveText('Stop live 8D');
+  await page.evaluate(() => { window.__live.apps = ['com.spotify.music', 'org.example.player']; });
+  await expect(page.locator('#liveStatus')).toHaveText('On: Spotify, org.example.player');
+  await page.click('#liveToggle');
+  await expect(page.locator('#liveStatus')).toHaveText('Off');
+});
