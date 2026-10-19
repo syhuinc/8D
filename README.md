@@ -89,7 +89,7 @@ Without the signing properties the release APK is unsigned, and Android won't in
 - Content must stay clear of the system bars.
 - The file picker must open, and open again after being cancelled.
 - Playback must run.
-- An MP3 export of the synthetic song is saved through the real *Save as* screen, then read back from `Download/`. The voice must be centred while guitar and piano orbit.
+- An MP3 export of the synthetic song is saved through the real *Save as* screen, then read back from `Download/`. With the default settings, the voice must be centred while guitar and piano move to both sides.
 - Cancelling the save must be reported.
 - Rotating must not reload the page.
 - Settings must survive a full app restart.
