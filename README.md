@@ -27,13 +27,27 @@ Open `index.html` in a browser, or host the folder on any static host. For GitHu
 
 ## Android app
 
-`android/` is a small native wrapper that bundles the same web app, so it runs fully offline. It asks for no permissions, not even internet access. The web files are copied in from the repository root at build time, so there is only one copy of the app code.
+`android/` is a small native wrapper that bundles the same web app, so it runs fully offline, with no internet permission. The web files are copied in from the repository root at build time, so there is only one copy of the app code. The converter itself needs no permissions; Live 8D (below) adds `MODIFY_AUDIO_SETTINGS` plus the foreground-service and notification permissions.
 
 A bare WebView can't save downloads, so the APK adds two native pieces in `MainActivity.java`:
 - **File picker:** handles `<input type=file>`.
 - **Save bridge:** `app.js` streams the exported file to the app in base64 chunks, then Android's *Save as* screen opens so you can choose where to save it.
 
 The app supports Android 7.0 (API 24) and later.
+
+### Live 8D for other apps (beta, Android 9+)
+
+Music apps announce their audio session so equalizer apps can process it (`AudioEffect.ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION`). `LiveService` is a foreground service with a Stop notification. It attaches Android's `DynamicsProcessing` effect to each announced session and animates it 25 times a second:
+- the far ear gets quieter, by up to 16 dB at the sides;
+- the far ear loses some treble (head shadow);
+- sound gets duller when it's behind the listener.
+
+It uses the saved Orbit time and Effect strength. Nothing is captured or re-played, so there is no added latency. Stopping releases the effects and the music sounds normal again.
+
+What it can't do, and why:
+- **It works per ear.** It can't move a sound from one ear to the other, so a hard-left instrument fades rather than travels. It also can't keep vocals centred. It is lighter than converting a file.
+- **It only reaches apps that announce their session.** By community reports Spotify does; others vary. Apps that don't announce their session aren't processed.
+- **No capture-based approach.** Capturing and re-playing other apps' audio was considered and rejected. It needs a protected permission granted over ADB to silence the originals, and Spotify, Chrome and SoundCloud block capture anyway.
 
 ### Build
 
@@ -73,6 +87,7 @@ Without the signing properties the release APK is unsigned, and Android won't in
 - Rotating must not reload the page.
 - Settings must survive a full app restart.
 - Dark mode must reach the page.
+- **Live 8D:** `android/testplayer`, a test-only app, plays 440 Hz in the left ear and 660 Hz in the right, and announces its session. Live 8D must attach to it. On the device's final output mix, the left-minus-right level must follow the 8 s orbit rhythm (more than 2.5 dB at 1/8 Hz), and that rhythm must fade to under a third after Stop. The meter is 8-bit, so the test judges the rhythm rather than peak-to-peak swings.
 
 WebView debugging, which the Android test relies on, is only switched on in debug builds. CI saves the APKs, the lint report and the emulator screenshots as artifacts on each run.
 

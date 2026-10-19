@@ -58,6 +58,7 @@ public class LiveService extends Service {
     private double period = 8;  // seconds per circle, from the shared settings
     private double depth = 1;   // effect strength 0..1
     private int frames;
+    private boolean debugLog; // per-second effect diagnostics, debug builds only
 
     private static final class Attached {
         final String packageName;
@@ -90,6 +91,7 @@ public class LiveService extends Service {
         super.onCreate();
         instance = this;
         main = new Handler(Looper.getMainLooper());
+        debugLog = (getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0;
         if (Build.VERSION.SDK_INT >= 34) {
             startForeground(NOTIFICATION_ID, buildNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
         } else {
@@ -159,7 +161,7 @@ public class LiveService extends Service {
                 dp.setInputGainbyChannel(1, rightGain);
                 dp.setPreEqBandByChannelIndex(0, 1, new DynamicsProcessing.EqBand(true, 20000f, leftTreble));
                 dp.setPreEqBandByChannelIndex(1, 1, new DynamicsProcessing.EqBand(true, 20000f, rightTreble));
-                if (frames % 25 == 0) {
+                if (debugLog && frames % 25 == 0) {
                     Log.d(TAG, String.format("session %d: control=%b enabled=%b set L=%.1f R=%.1f dB, reads L=%.1f R=%.1f",
                             session, dp.hasControl(), dp.getEnabled(), leftGain, rightGain,
                             dp.getInputGainByChannelIndex(0), dp.getInputGainByChannelIndex(1)));
