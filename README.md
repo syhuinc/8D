@@ -12,6 +12,8 @@ Open `index.html` in a browser, or host the folder on any static host. For GitHu
 2. Press play and adjust the sliders while you listen through headphones.
 3. Pick a format (MP3 at 320, 192 or 128 kbps, or lossless WAV) and click **Download 8D version**.
 
+**Compare with original** (under the player) switches between the effect and the untouched song at the same spot, so you can judge the difference. Both effects are level-matched to the song, measured on a stereo pink-noise mix: 8D within 0.1 dB, Spatial within 1 dB. Before this, 8D came out about 3 dB quieter than the song, and a quieter version sounds worse side by side even when it isn't. Very wide stereo still comes out about 2 dB quieter in 8D, because 8D sums the song to mono before moving it.
+
 **Presets** (Classic 8D, Slow & dreamy, Fast spin, Concert hall, Bass 8D) set the sliders in one tap; the active one is highlighted. All settings are remembered on the device.
 
 | Control | What it does |
@@ -35,6 +37,8 @@ Open `index.html` in a browser, or host the folder on any static host. For GitHu
 A bare WebView can't save downloads, so the APK adds two native pieces in `MainActivity.java`:
 - **File picker:** handles `<input type=file>`.
 - **Save bridge:** `app.js` streams the exported file to the app in base64 chunks, then Android's *Save as* screen opens so you can choose where to save it.
+
+**Sharing a song to the app:** choose 8D Converter under "Share" or "Open with" in Files, a chat app or a music app that offers it. MainActivity copies the song to its cache (the other app's read grant only lasts while the activity runs), then the page reads it through the bridge in base64 pieces and loads it like a picked file. This works whether the app was open or closed. Streaming apps such as Spotify and Apple Music don't share their audio files, so this is for songs you have as files.
 
 The app supports Android 7.0 (API 24) and later.
 
@@ -111,6 +115,7 @@ Without the signing properties the release APK is unsigned, and Android won't in
   - after Stop, everything is still.
 
   "Process all audio" is measured and reported, not required; on the emulator it measured 0.0 dB.
+- **Sharing:** the test player's `ShareActivity` shares a 6 s WAV through its own content provider (`ACTION_SEND` with a read grant), as a chat app would. It must open in the converter both while the app is open and when it was closed.
 
 WebView debugging, which the Android test relies on, is only switched on in debug builds. CI saves the APKs, the lint report and the emulator screenshots as artifacts on each run.
 

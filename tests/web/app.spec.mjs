@@ -596,3 +596,123 @@ test('spatial: the orbit settings hide, the choice is remembered, and switching 
   await expect(page.locator('#export')).toHaveText('Download 8D version');
   expect(problems).toEqual([]);
 });
+
+// Loudness and "Compare with original"
+
+test('8D and Spatial are as loud as the song (within 1.5 dB on a typical stereo mix), so comparing is fair', async ({ page }) => {
+  await page.goto('');
+  const r = await page.evaluate(async () => {
+    const sr = 44100, secs = 5;
+    let seed = 11;
+    const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296) * 2 - 1;
+    const pink = () => {
+      const a = new Float32Array(sr * secs);
+      let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+      for (let i = 0; i < a.length; i++) {
+        const w = rnd();
+        b0 = 0.99886 * b0 + w * 0.0555179; b1 = 0.99332 * b1 + w * 0.0750759; b2 = 0.969 * b2 + w * 0.153852;
+        b3 = 0.8665 * b3 + w * 0.3104856; b4 = 0.55 * b4 + w * 0.5329522; b5 = -0.7616 * b5 - w * 0.016898;
+        a[i] = 0.03 * (b0 + b1 + b2 + b3 + b4 + b5 + b6 + w * 0.5362); b6 = w * 0.115926;
+      }
+      return a;
+    };
+    const a = pink(), b = pink();
+    const left = a.map((x, i) => 0.7 * x + 0.3 * b[i]), right = b.map((x, i) => 0.7 * x + 0.3 * a[i]); // partly correlated, like a mix
+    const loudness = async (extra) => {
+      const off = new OfflineAudioContext({ numberOfChannels: 2, length: sr * secs, sampleRate: sr });
+      const g = buildGraph(off, { ...params, strength: 1, reverb: 0.3, height: 0, bass: 0, hrtf: true, auto: false, ...extra });
+      const B = new AudioBuffer({ numberOfChannels: 2, length: sr * secs, sampleRate: sr });
+      B.copyToChannel(left, 0);
+      B.copyToChannel(right, 1);
+      const src = new AudioBufferSourceNode(off, { buffer: B });
+      src.connect(g.input);
+      g.start(0);
+      src.start(0);
+      const out = await off.startRendering();
+      let e = 0, e0 = 0;
+      for (let c = 0; c < 2; c++) {
+        const x = out.getChannelData(c), y = B.getChannelData(c);
+        for (let i = sr; i < 4 * sr; i++) { e += x[i] ** 2; e0 += y[i] ** 2; }
+      }
+      return 10 * Math.log10(e / e0); // relative to the song itself
+    };
+    return { eightD: await loudness({ mode: '8d' }), spatial: await loudness({ mode: 'spatial' }) };
+  });
+  expect(Math.abs(r.eightD), `8D: ${r.eightD.toFixed(1)} dB`).toBeLessThan(1.5);
+  expect(Math.abs(r.spatial), `Spatial: ${r.spatial.toFixed(1)} dB`).toBeLessThan(1.5);
+});
+
+test('compare with original: plays the untouched song at the same position, then switches back', async ({ page }) => {
+  const problems = collectProblems(page);
+  await page.goto('');
+  await loadSong(page, mixFile());
+  // Tap into the output: is it the song as-is (left and right differ as in the file), or processed?
+  await page.evaluate(() => {
+    window.__levels = () => {
+      const ctx = state.ctx;
+      if (!window.__tap) {
+        window.__tap = [0, 1].map(() => new AnalyserNode(ctx, { fftSize: 32768, smoothingTimeConstant: 0 }));
+        const split = new ChannelSplitterNode(ctx, { numberOfOutputs: 2 });
+        state.graph.output.connect(split);
+        split.connect(window.__tap[0], 0);
+        split.connect(window.__tap[1], 1);
+      }
+      // Level at 659 Hz (guitar: 0.85 left, 0.25 right in the file) per ear, dB.
+      return window.__tap.map((a) => {
+        const f = new Float32Array(a.frequencyBinCount);
+        a.getFloatFrequencyData(f);
+        const k = Math.round((659.25 * a.fftSize) / ctx.sampleRate);
+        return Math.max(f[k - 1], f[k], f[k + 1]);
+      });
+    };
+  });
+  await page.click('#play');
+  await page.evaluate(() => window.__levels()); // start listening
+  await page.waitForTimeout(1500);
+  const [pl, pr] = await page.evaluate(() => window.__levels());
+  await page.click('#compare');
+  await expect(page.locator('#compare')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('#compare')).toContainText('Hearing the original');
+  await page.waitForTimeout(1200);
+  const [l, r] = await page.evaluate(() => window.__levels());
+  // The file's own balance: 0.85 / 0.25 is 10.6 dB.
+  expect(Math.abs(l - r - 10.6), `original left-right ${(l - r).toFixed(1)} dB (processed: ${(pl - pr).toFixed(1)})`).toBeLessThan(1);
+  expect(Math.abs(pl - pr - 10.6), `processed left-right ${(pl - pr).toFixed(1)} dB should differ from the file's`).toBeGreaterThan(2);
+  expect(await page.evaluate(() => state.playing)).toBe(true);
+  // Switching the effect while comparing keeps comparing.
+  await page.selectOption('#mode', 'spatial');
+  await page.waitForTimeout(800);
+  expect(await page.evaluate(() => state.comparing)).toBe(true);
+  await page.click('#compare');
+  await expect(page.locator('#compare')).toHaveText('Compare with original');
+  expect(problems).toEqual([]);
+});
+
+test('Android: a song shared from another app loads like a picked one', async ({ page }) => {
+  const wav = makeWav({ seconds: 3 });
+  await page.addInitScript((b64) => {
+    const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    window.__shared = { name: 'from chat.wav', type: 'audio/wav', size: bytes.length };
+    window.__reads = 0;
+    window.Android8D = {
+      sharedInfo: () => (window.__shared ? JSON.stringify(window.__shared) : ''),
+      readShared: (offset, length) => {
+        window.__reads++;
+        let s = '';
+        for (const b of bytes.subarray(offset, offset + length)) s += String.fromCharCode(b);
+        return btoa(s);
+      },
+      sharedDone: () => { window.__shared = null; },
+    };
+  }, Buffer.from(wav).toString('base64'));
+  await page.goto('');
+  await page.evaluate(() => window.__android8dShared());
+  await expect(page.locator('#dropTitle')).toHaveText('from chat.wav');
+  await expect(page.locator('#dur')).toHaveText('0:03');
+  await expect(page.locator('#status')).toHaveText(''); // analysis done
+  expect(await page.evaluate(() => window.__shared)).toBeNull(); // told the app it can delete its copy
+  // Called again (page reload races): nothing left to load, nothing breaks.
+  await page.evaluate(() => window.__android8dShared());
+  await page.evaluate(() => window.__android8dSharedFailed());
+  await expect(page.locator('#status')).toContainText("didn't let 8D Converter read it");
+});

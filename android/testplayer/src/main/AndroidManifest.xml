@@ -4,6 +4,11 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
 
+    <!-- To hand a song to 8D Converter, like a file manager or chat app would. -->
+    <queries>
+        <package android:name="io.github.syhuinc.eightd" />
+    </queries>
+
     <application android:label="8D Test Player">
         <activity android:name=".PlayerActivity" android:exported="true">
             <intent-filter>
@@ -11,5 +16,12 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- Shares a generated song with 8D Converter (ACTION_SEND), through SongProvider. -->
+        <activity android:name=".ShareActivity" android:exported="true" />
+        <provider
+            android:name=".SongProvider"
+            android:authorities="io.github.syhuinc.eightd.testplayer.songs"
+            android:exported="false"
+            android:grantUriPermissions="true" />
     </application>
 </manifest>

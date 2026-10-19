@@ -81,7 +81,7 @@ public class PlayerActivity extends Activity {
     private void measure(int session) {
         Visualizer own = open(session, Visualizer.SCALING_MODE_AS_PLAYED), mix = open(0, Visualizer.SCALING_MODE_NORMALIZED);
         if (own == null && mix == null) return;
-        byte[] fft = new byte[Visualizer.getCaptureSizeRange()[1]];
+        byte[][] buffers = {own == null ? null : new byte[own.getCaptureSize()], mix == null ? null : new byte[mix.getCaptureSize()]};
         long t0 = System.nanoTime();
         while (true) {
             try {
@@ -90,9 +90,16 @@ public class PlayerActivity extends Activity {
                 return;
             }
             StringBuilder line = new StringBuilder(String.format("level t=%.2f", (System.nanoTime() - t0) / 1e9));
-            for (Object[] v : new Object[][]{{"", own}, {"mix_", mix}}) {
+            Object[][] meters = {{"", own, buffers[0]}, {"mix_", mix, buffers[1]}};
+            for (Object[] v : meters) {
                 Visualizer vis = (Visualizer) v[1];
-                if (vis == null || vis.getFft(fft) != Visualizer.SUCCESS) continue;
+                byte[] fft = (byte[]) v[2];
+                try {
+                    if (vis == null || vis.getFft(fft) != Visualizer.SUCCESS) continue;
+                } catch (RuntimeException e) {
+                    Log.e(TAG, "meter " + v[0] + " failed: " + e);
+                    continue;
+                }
                 double rate = vis.getSamplingRate() / 1000.0;
                 for (int hz : new int[]{440, 660, 7000, 9000}) {
                     line.append(String.format(" %sf%d=%.1f", v[0], hz, peakDb(fft, hz, fft.length, rate)));
@@ -105,9 +112,16 @@ public class PlayerActivity extends Activity {
     private static Visualizer open(int session, int scaling) {
         try {
             Visualizer v = new Visualizer(session);
-            v.setCaptureSize(Visualizer.getCaptureSizeRange()[1]);
-            v.setScalingMode(scaling);
-            v.setEnabled(true);
+            // Live 8D's "Follow the song" may already run a visualizer on this
+            // session; ours then shares it and comes back enabled, and its
+            // capture size can't be changed. Its settings match ours (largest
+            // capture, as played), so just use it.
+            if (!v.getEnabled()) {
+                v.setCaptureSize(Visualizer.getCaptureSizeRange()[1]);
+                v.setScalingMode(scaling);
+                v.setEnabled(true);
+            }
+            Log.i(TAG, "visualizer on session " + session + ": capture " + v.getCaptureSize());
             return v;
         } catch (RuntimeException e) {
             Log.e(TAG, "visualizer on session " + session + " unavailable: " + e);

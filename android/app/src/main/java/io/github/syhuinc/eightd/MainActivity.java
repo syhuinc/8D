@@ -5,12 +5,14 @@ import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.res.Configuration;
+import android.database.Cursor;
 import android.graphics.Color;
 import android.graphics.Insets;
 import android.graphics.drawable.ColorDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.provider.OpenableColumns;
 import android.util.Base64;
 import android.view.View;
 import android.view.WindowInsets;
@@ -31,6 +33,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.RandomAccessFile;
 
 /**
  * Hosts the web app (bundled under assets/www) in a WebView and fills the two
@@ -52,6 +55,11 @@ public class MainActivity extends Activity {
     private OutputStream pendingOut;
     private String pendingName;
     private String pendingMime;
+
+    // A song shared or opened from another app: copied here, then read by the page (see receiveShared in app.js).
+    private volatile File sharedFile;
+    private volatile String sharedName;
+    private volatile String sharedMime;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -101,11 +109,82 @@ public class MainActivity extends Activity {
                 }
                 return false;
             }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                if (sharedFile != null) offerShared(); // shared before the page was ready
+            }
         });
 
         if (savedInstanceState == null || web.restoreState(savedInstanceState) == null) {
             web.loadUrl(START_URL);
         }
+        if (savedInstanceState == null) receive(getIntent());
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent); // singleTask: a song shared while the app is open arrives here
+        receive(intent);
+    }
+
+    /** A song shared to the app (ACTION_SEND) or opened with it (ACTION_VIEW): copy it, then hand it to the page. */
+    @SuppressWarnings("deprecation") // getParcelableExtra(String) before Android 13
+    private void receive(Intent intent) {
+        if (intent == null) return;
+        Uri uri = null;
+        if (Intent.ACTION_SEND.equals(intent.getAction())) {
+            uri = Build.VERSION.SDK_INT >= 33
+                    ? intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri.class)
+                    : intent.getParcelableExtra(Intent.EXTRA_STREAM);
+        } else if (Intent.ACTION_VIEW.equals(intent.getAction())) {
+            uri = intent.getData();
+        }
+        if (uri == null) return;
+        String name = displayName(uri);
+        String type = getContentResolver().getType(uri);
+        String mime = type != null ? type : intent.getType() != null ? intent.getType() : "audio/*";
+        Uri source = uri;
+        // The read grant lasts while this activity runs; copying keeps the song if the page reloads.
+        new Thread(() -> {
+            File copy = new File(getCacheDir(), "shared-" + System.nanoTime()); // never overwrites one being read
+            boolean ok;
+            try (InputStream in = getContentResolver().openInputStream(source);
+                 OutputStream out = new FileOutputStream(copy)) {
+                if (in == null) throw new IOException("no data");
+                byte[] buf = new byte[64 * 1024];
+                int n;
+                while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                ok = true;
+            } catch (IOException | SecurityException e) {
+                ok = false;
+            }
+            boolean copied = ok;
+            runOnUiThread(() -> {
+                if (!copied) {
+                    web.evaluateJavascript("window.__android8dSharedFailed && window.__android8dSharedFailed()", null);
+                    return;
+                }
+                deleteQuietly(sharedFile); // an earlier share the page never took
+                sharedName = name;
+                sharedMime = mime;
+                sharedFile = copy;
+                offerShared();
+            });
+        }, "receive-shared").start();
+    }
+
+    private void offerShared() {
+        web.evaluateJavascript("window.__android8dShared && window.__android8dShared()", null);
+    }
+
+    private String displayName(Uri uri) {
+        try (Cursor c = getContentResolver().query(uri, new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null)) {
+            if (c != null && c.moveToFirst() && !c.isNull(0)) return c.getString(0);
+        } catch (RuntimeException ignored) {
+        }
+        String last = uri.getLastPathSegment();
+        return last != null && last.contains(".") ? last : "Shared song";
     }
 
     /** Draw under the system bars and pad the content so nothing sits beneath them. */
@@ -277,6 +356,39 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public String liveStatus() {
             return Build.VERSION.SDK_INT >= 28 ? LiveService.statusJson() : "{\"running\":false,\"apps\":[]}";
+        }
+
+        // A song shared from another app (see receive): its name and size, then its bytes in base64 pieces.
+        @JavascriptInterface
+        public String sharedInfo() {
+            File f = sharedFile;
+            if (f == null) return "";
+            try {
+                return new org.json.JSONObject().put("name", sharedName).put("type", sharedMime).put("size", f.length()).toString();
+            } catch (org.json.JSONException e) {
+                return "";
+            }
+        }
+
+        @JavascriptInterface
+        public String readShared(long offset, int length) {
+            File f = sharedFile;
+            if (f == null) return "";
+            try (RandomAccessFile in = new RandomAccessFile(f, "r")) {
+                in.seek(offset);
+                byte[] buf = new byte[(int) Math.max(0, Math.min(length, in.length() - offset))];
+                in.readFully(buf);
+                return Base64.encodeToString(buf, Base64.NO_WRAP);
+            } catch (IOException e) {
+                return "";
+            }
+        }
+
+        @JavascriptInterface
+        public void sharedDone() {
+            File f = sharedFile;
+            sharedFile = null;
+            deleteQuietly(f);
         }
 
         // Remembered settings. SharedPreferences + commit() reach disk right away;

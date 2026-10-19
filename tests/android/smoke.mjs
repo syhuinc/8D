@@ -319,6 +319,24 @@ async function main() {
     return sab / Math.sqrt(saa * sbb + 1e-12);
   }
 
+  if (testPlayerApk) await step('a song shared from another app opens in the converter (app open, and app closed)', async () => {
+    const shareFromPlayer = () => device.shell('am start -W -n io.github.syhuinc.eightd.testplayer/.ShareActivity');
+    const opened = async () => {
+      await page.waitForFunction(() => document.getElementById('dropTitle').textContent === 'shared tones.wav', null, { timeout: 30_000 });
+      assert.equal(await page.textContent('#dur'), '0:06');
+    };
+    await device.installApk(testPlayerApk);
+    await launch(); // open: arrives through onNewIntent
+    await shareFromPlayer();
+    await opened();
+    await device.shell(`am force-stop ${PKG}`); // closed: the share starts the app
+    await shareFromPlayer();
+    const webview = await device.webView({ pkg: PKG }, { timeout: 30_000 });
+    page = await webview.page();
+    await opened();
+    await device.screenshot({ path: `${OUT}/shared.png` });
+  });
+
   if (testPlayerApk) await step("live 8D: voice band stays centred while bass and highs move; everything moves when vocals mode is off; follows a beat; stops cleanly", async () => {
     await launch();
     await withTimeout(page.evaluate(() => Android8D.liveStart()), 'starting live 8D');
@@ -383,10 +401,16 @@ async function main() {
       return { v: orbitStrength(voice, 1), h: orbitStrength(highs, 1), n: highs.length };
     };
     const before = JSON.parse(await withTimeout(page.evaluate(() => Android8D.liveStatus()), 'reading live status'));
+    const startLog = await sh('logcat -d -s TESTPLAYER:* 8DLIVE:* AndroidRuntime:E AudioTrack:W Visualizer:*');
     const followed = await followMeasure();
     const after = JSON.parse(await withTimeout(page.evaluate(() => Android8D.liveStatus()), 'reading live status'));
     console.log(`  follow the song: ${JSON.stringify(after.follow)}, ${after.follow && before.follow ? after.follow.beats - before.follow.beats : '?'} hits in ~10.5 s;`
       + ` 1-s left-right rhythm: highs ${followed.h.toFixed(1)} dB, voice band ${followed.v.toFixed(1)} dB (${followed.n} readings); log: ${(after.log || []).slice(0, 5).join(' | ')}`);
+    if (!(after.follow && after.follow.onBeat)) {
+      const endLog = await sh('logcat -d -s TESTPLAYER:* 8DLIVE:* AndroidRuntime:E AudioTrack:W Visualizer:*');
+      console.log(`--- log while starting the kick player ---\n${startLog.split('\n').slice(-40).join('\n')}`);
+      console.log(`--- log while measuring ---\n${endLog.split('\n').filter((l) => !/ level t=/.test(l)).slice(-40).join('\n')}`);
+    }
     assert.ok(after.follow && after.follow.onBeat, 'live 8D did not find the beat');
     assert.ok(after.follow.bpm >= 110 && after.follow.bpm <= 130, `wrong tempo: ${after.follow.bpm} BPM, expected 120`);
     const hits = after.follow.beats - before.follow.beats;
