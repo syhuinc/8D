@@ -26,13 +26,26 @@ const focusedWindow = async () => (await sh('dumpsys window | grep mCurrentFocus
 const pickerShowing = async () => /documentsui/i.test(await focusedWindow()); // system picker / "Save as"
 const pressBack = () => sh('input keyevent KEYCODE_BACK');
 
-async function waitUntil(check, what, timeout = 15_000) {
+async function waitUntil(check, what, timeout = 30_000) {
   const end = Date.now() + timeout;
   while (Date.now() < end) {
     if (await check()) return;
+    await dismissNotResponding();
     await sleep(500);
   }
   throw new Error(`timed out after ${timeout / 1000}s waiting for ${what} (focus: ${await focusedWindow()})`);
+}
+
+/**
+ * A cold emulator sometimes shows "<system app> isn't responding" (seen once
+ * for the file picker). A person would press Wait; so does the test.
+ */
+async function dismissNotResponding() {
+  if (!/Application Not Responding/.test(await focusedWindow())) return;
+  const wait = (await screenNodes()).find((n) => /^wait$/i.test(n.text) && n.box);
+  console.log(`  (system "not responding" dialog; pressing ${wait ? 'Wait' : 'Back'})`);
+  if (wait) await sh(`input tap ${(wait.box.x1 + wait.box.x2) >> 1} ${(wait.box.y1 + wait.box.y2) >> 1}`);
+  else await pressBack();
 }
 
 /** All on-screen nodes as attribute maps, plus parsed bounds. */
