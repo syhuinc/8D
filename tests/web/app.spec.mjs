@@ -159,6 +159,7 @@ const isCentred = (p) => (p.match(/=/g) || []).length >= 9;
 async function exportMix(page, vocals) {
   await page.goto('');
   await loadSong(page, { name: 'mix.wav', mimeType: 'audio/wav', buffer: makeMix() });
+  await page.selectOption('#motion', 'circle'); // this test checks the circle's left/right pattern
   await page.setChecked('#vocals', vocals);
   await expect(page.locator('#export')).toBeEnabled();
   const { bytes } = await exportAndDownload(page, 'wav');
@@ -243,6 +244,7 @@ test('vocal strictness decides whether a slightly off-centre sound stays in the 
     const page = await browser.newPage();
     await page.goto('');
     await loadSong(page, mixFile());
+    await page.selectOption('#motion', 'circle');
     await setSlider(page, 'vocalFocus', focus);
     await expect(page.locator('#export')).toBeEnabled(); // re-separation finished
     const { bytes } = await exportAndDownload(page, 'wav');
@@ -327,6 +329,7 @@ test('follow the music: the exported orbit is 16 beats long (9.6 s at 100 BPM); 
     await loadSong(page, beatFile({ bpm: 100, seconds: 40 }));
     await page.setChecked('#vocals', false); // mono test track: let it all orbit
     await page.setChecked('#auto', auto);
+    if (auto) await page.selectOption('#motion', 'circle');
     if (auto) await expect(page.locator('#autoNote')).toContainText('100 BPM: one circle every 16 beats');
     await setSlider(page, 'reverb', 0);
     const { bytes } = await exportAndDownload(page, 'wav');
@@ -341,6 +344,7 @@ test('follow the music: the orbit turns faster in the loud half than in the quie
   await page.goto('');
   await loadSong(page, beatFile({ bpm: 100, seconds: 60, quietFirstHalf: true }));
   await page.setChecked('#vocals', false);
+  await page.selectOption('#motion', 'circle');
   await expect(page.locator('#autoNote')).toContainText('faster in loud parts');
   await setSlider(page, 'reverb', 0);
   await setSlider(page, 'period', 4); // target 4 s -> 8 beats = 4.8 s, so each half holds several circles
@@ -383,4 +387,65 @@ test('3D cues: with simple panning, the far ear still hears the bass (crossfeed)
   const farEar = side.left - side.right;
   expect(farEar, `far ear ${farEar.toFixed(1)} dB`).toBeGreaterThan(-14);
   expect(farEar).toBeLessThan(-5);
+});
+
+// Movement with the beat, and bass that moves
+/** Left-minus-right level (dB) of `freq` while the music holds its spot on each beat. */
+async function heldSides(page, bytes, freq, bpm, beats) {
+  const beat = 60 / bpm, out = [];
+  for (let k = 1; k <= beats; k++) {
+    const e = await earLevelsInPage(page, bytes, freq, k * beat + 0.45 * beat, k * beat + 0.9 * beat);
+    out.push(e.left - e.right);
+  }
+  return out;
+}
+
+test('here & there: on a 120 BPM track the music holds a new spot on every beat', async ({ page }) => {
+  await page.goto('');
+  await loadSong(page, beatFile({ bpm: 120, seconds: 20 }));
+  await page.setChecked('#vocals', false); // mono test track
+  await expect(page.locator('#autoNote')).toContainText('120 BPM: the music jumps here and there around you on every beat');
+  await setSlider(page, 'reverb', 0);
+  const { bytes } = await exportAndDownload(page, 'wav');
+  const sides = await heldSides(page, bytes, 700, 120, 24);
+  const moved = sides.slice(1).filter((d, i) => Math.abs(d - sides[i]) > 3).length;
+  expect(moved / (sides.length - 1), `left-minus-right per beat: ${sides.map((d) => d.toFixed(0)).join(' ')}`).toBeGreaterThan(0.6);
+  expect(sides.some((d) => d > 4) && sides.some((d) => d < -4)).toBe(true); // both sides are used
+});
+
+test('left-right with the beat: the music switches sides on (nearly) every beat', async ({ page }) => {
+  await page.goto('');
+  await loadSong(page, beatFile({ bpm: 120, seconds: 20 }));
+  await page.setChecked('#vocals', false);
+  await page.selectOption('#motion', 'bounce');
+  await expect(page.locator('#autoNote')).toContainText('bounces left and right on every beat');
+  await setSlider(page, 'reverb', 0);
+  const { bytes } = await exportAndDownload(page, 'wav');
+  const sides = await heldSides(page, bytes, 700, 120, 24);
+  const switched = sides.slice(1).filter((d, i) => Math.sign(d) !== Math.sign(sides[i]) && Math.abs(d) > 3).length;
+  expect(switched / (sides.length - 1), `left-minus-right per beat: ${sides.map((d) => d.toFixed(0)).join(' ')}`).toBeGreaterThan(0.8);
+});
+
+test('the voice stays centred while the music jumps here and there', async ({ page }) => {
+  await page.goto('');
+  await loadSong(page, mixFile()); // its 4 Hz vocal rhythm reads as 120 BPM
+  await expect(page.locator('#autoNote')).toContainText('here and there');
+  const { bytes } = await exportAndDownload(page, 'wav');
+  const p = await placementInPage(page, bytes, [MIX.voice[1], MIX.guitar[0]]);
+  expect(isCentred(p[MIX.voice[1]]), `voice ${p[MIX.voice[1]]}`).toBe(true);
+  const g = p[MIX.guitar[0]];
+  expect((g.match(/L/g) || []).length >= 2 && (g.match(/R/g) || []).length >= 2, `guitar ${g}`).toBe(true);
+});
+
+test('the bass moves too: at the side, a 60 Hz tone is much louder in the near ear', async ({ page }) => {
+  await page.goto('');
+  await loadSong(page, { name: 'bass.wav', mimeType: 'audio/wav', buffer: makeTones({ freqs: [60], seconds: 10, amplitude: 0.4 }) });
+  await page.setChecked('#auto', false); // fixed 8 s circle: right at 2 s, left at 6 s
+  await setSlider(page, 'reverb', 0);
+  const { bytes } = await exportAndDownload(page, 'wav');
+  const right = await earLevelsInPage(page, bytes, 60, 1.7, 2.3);
+  const left = await earLevelsInPage(page, bytes, 60, 5.7, 6.3);
+  const atRight = right.right - right.left, atLeft = left.left - left.right;
+  expect(atRight, `at the right: near ear +${atRight.toFixed(1)} dB; at the left: +${atLeft.toFixed(1)} dB`).toBeGreaterThan(8);
+  expect(atLeft).toBeGreaterThan(8);
 });

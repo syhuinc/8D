@@ -196,8 +196,9 @@ const Auto = (() => {
    * once per bar (4 beats, or 4 s without a beat), plus the time that should
    * be "in front".
    */
-  function plan(a, targetPeriod) {
+  function plan(a, targetPeriod, style = 'circle') {
     const synced = a.bpm !== null && a.confidence >= MIN_CONFIDENCE;
+    if (style !== 'circle' && synced) return beatPlan(a, style);
     const beat = synced ? 60 / a.bpm : null;
     let base = targetPeriod, beatsPerCircle = null;
     if (synced) {
@@ -228,8 +229,46 @@ const Auto = (() => {
     return { synced, bpm: synced ? a.bpm : null, beatsPerCircle, base, dynamic, anchor, segments };
   }
 
+  // Spots around the head for "here & there" (degrees clockwise from the
+  // front). A fixed sequence with big jumps, so export and preview always match.
+  const SCATTER = [90, 225, 330, 135, 260, 30, 190, 300, 60, 210, 340, 120];
+  const BOUNCE = [80, -80]; // right, left (passing through the front)
+
+  /** Loudness tier for the stretch starting at t: 'quiet', 'normal' or 'loud'. */
+  function tierAt(a, t, length, p10, p90, dynamic) {
+    if (!dynamic) return 'normal';
+    const db = a.loudness;
+    let sum = 0, n = 0;
+    for (let s = Math.max(0, Math.floor(t)); s < Math.min(db.length, Math.ceil(t + length)); s++, n++) sum += db[s];
+    const e = n ? (sum / n - p10) / (p90 - p10) : 0.5;
+    return e > 0.7 ? 'loud' : e < 0.3 ? 'quiet' : 'normal';
+  }
+
+  /**
+   * Movement on the beat: the music jumps to a new spot on every beat (every
+   * 2 beats in quiet parts, or above 140 BPM), gliding there quickly.
+   */
+  function beatPlan(a, style) {
+    const beat = 60 / a.bpm;
+    const db = a.loudness;
+    const p10 = percentile(db, 0.1), p90 = percentile(db, 0.9);
+    const dynamic = p90 - p10 >= MIN_DYNAMICS_DB;
+    const spots = style === 'bounce' ? BOUNCE : SCATTER;
+    const baseBeats = a.bpm > 140 ? 2 : 1;
+    const moves = [];
+    let t = a.beatTime, k = 0;
+    while (t < a.duration) {
+      moves.push({ t, angle: (spots[k % spots.length] * Math.PI) / 180 });
+      k++;
+      const beats = tierAt(a, t, beat, p10, p90, dynamic) === 'quiet' ? 2 * baseBeats : baseBeats;
+      t += beats * beat;
+    }
+    return { kind: style, synced: true, bpm: a.bpm, beat, baseBeats, dynamic, anchor: a.beatTime, moves };
+  }
+
   /** Orbit angle (radians) every 1/ANGLE_RATE s; 0 = front, at the anchor beat. */
   function angles(p, duration) {
+    if (p.moves) return moveAngles(p, duration);
     const n = Math.ceil(duration * ANGLE_RATE) + 2;
     const out = new Float32Array(n);
     let angle = 0, seg = 0;
@@ -241,6 +280,32 @@ const Auto = (() => {
     }
     const shift = angleAt(out, p.anchor);
     for (let i = 0; i < n; i++) out[i] -= shift;
+    return out;
+  }
+
+  /** Glide quickly to each move's spot (shortest way round), then hold. */
+  function moveAngles(p, duration) {
+    const n = Math.ceil(duration * ANGLE_RATE) + 2;
+    const out = new Float32Array(n);
+    // Unwrap the targets so each glide takes the shorter way around the head.
+    const targets = [p.moves[0].angle];
+    for (let i = 1; i < p.moves.length; i++) {
+      let d = p.moves[i].angle - p.moves[i - 1].angle;
+      d = Math.atan2(Math.sin(d), Math.cos(d));
+      targets.push(targets[i - 1] + d);
+    }
+    let i = 0;
+    for (let j = 0; j < n; j++) {
+      const t = j / ANGLE_RATE;
+      while (i + 1 < p.moves.length && p.moves[i + 1].t <= t) i++;
+      if (t < p.moves[0].t || i === 0) { out[j] = targets[0]; continue; }
+      const start = p.moves[i].t;
+      const next = i + 1 < p.moves.length ? p.moves[i + 1].t : start + p.beat;
+      const glide = Math.min(0.3, 0.35 * (next - start));
+      const u = Math.min(1, (t - start) / glide);
+      const eased = u * u * (3 - 2 * u);
+      out[j] = targets[i - 1] + (targets[i] - targets[i - 1]) * eased;
+    }
     return out;
   }
 
@@ -269,7 +334,16 @@ const Auto = (() => {
   }
 
   /** One line for the page explaining what "follow the music" decided. */
-  function describe(p) {
+  function describe(p, style = 'circle') {
+    if (p.moves) {
+      const what = p.kind === 'bounce' ? 'the music bounces left and right' : 'the music jumps here and there around you';
+      const every = p.baseBeats === 2 ? 'every 2 beats' : 'on every beat';
+      const quiet = p.dynamic ? `, every ${2 * p.baseBeats} beats in quiet parts` : '';
+      return `${Math.round(p.bpm)} BPM: ${what} ${every}${quiet}.`;
+    }
+    if (style !== 'circle' && !p.synced) {
+      return 'No steady beat found, so the music circles instead (at your orbit time, faster in loud parts).';
+    }
     const speed = p.dynamic ? 'faster in loud parts, slower in quiet ones' : 'steady speed (the loudness hardly changes)';
     if (p.synced) {
       return `${Math.round(p.bpm)} BPM: one circle every ${p.beatsPerCircle} beats (${p.base.toFixed(1)} s), starting on the beat; ${speed}.`;

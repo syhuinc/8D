@@ -56,6 +56,14 @@
         <input id="period" type="range" min="2" max="20" step="0.5" value="8">
       </div>
       <label class="check vocals"><input id="auto" type="checkbox" checked> Follow the music (sync to the beat, faster in loud parts)</label>
+      <div class="ctl indent">
+        <label for="motion">Movement</label>
+        <select id="motion">
+          <option value="scatter">Here &amp; there with the beat</option>
+          <option value="bounce">Left–right with the beat</option>
+          <option value="circle">Smooth circle</option>
+        </select>
+      </div>
       <p id="autoNote" class="hint"></p>
       <div class="ctl">
         <label for="strength">Effect strength <output id="strengthOut"></output></label>

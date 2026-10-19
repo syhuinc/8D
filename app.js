@@ -16,6 +16,7 @@ const params = {
   hrtf: true,
   vocals: true,   // keep the centre (vocal) track still while the rest orbits
   auto: true,     // follow the music: beat-synced orbit, faster in loud parts (auto.js)
+  motion: 'scatter', // with the beat: 'circle', 'bounce' (left-right) or 'scatter' (here & there)
   vocalFocus: 0.5, // vocal strictness, see Vocals.extractCenter
   bass: 0,        // low-shelf boost in dB
   format: 'mp3-192',
@@ -34,7 +35,7 @@ const PRESETS = {
 // through its bridge (SharedPreferences), otherwise in localStorage. Storage
 // can be unavailable (private mode, blocked storage), so every access is guarded.
 const SETTINGS_KEY = '8d-converter.settings';
-const SAVED = ['period', 'strength', 'reverb', 'height', 'bass', 'hrtf', 'vocals', 'vocalFocus', 'format', 'auto'];
+const SAVED = ['period', 'strength', 'reverb', 'height', 'bass', 'hrtf', 'vocals', 'vocalFocus', 'format', 'auto', 'motion'];
 
 function loadSettings() {
   try {
@@ -96,6 +97,8 @@ function makeImpulse(ctx, seconds, decay, channels = 2) {
 }
 
 const CROSSFEED = 0.35; // about -9 dB
+const BASS_SPLIT = 150;  // Hz: below this the bass is panned plainly (see buildGraph)
+const BASS_PAN = 0.85;   // how far the bass swings (1 = fully into one ear)
 
 /**
  * Headphone crossfeed for simple left/right panning: a little of each side's
@@ -146,7 +149,9 @@ function buildGraph(ctx, p) {
   // z (front -1 .. back +1) from either source is summed here: it positions the
   // panner and also drives the behind-the-head cues below.
   const zBus = new GainNode(ctx);
-  oscX.connect(gainX).connect(panner.positionX);
+  const xBus = new GainNode(ctx);
+  oscX.connect(gainX).connect(xBus);
+  xBus.connect(panner.positionX);
   oscZ.connect(gainZ).connect(zBus);
   oscY.connect(gainY).connect(panner.positionY);
   zBus.connect(panner.positionZ);
@@ -155,7 +160,7 @@ function buildGraph(ctx, p) {
   // drives the position instead, while the oscillators are muted.
   const motionIn = new ChannelSplitterNode(ctx, { numberOfOutputs: 3 });
   const motionY = new GainNode(ctx, { gain: auto ? p.height : 0 });
-  motionIn.connect(panner.positionX, 0);
+  motionIn.connect(xBus, 0);
   motionIn.connect(motionY, 1).connect(panner.positionY);
   motionIn.connect(zBus, 2);
 
@@ -170,9 +175,19 @@ function buildGraph(ctx, p) {
   zBus.connect(new GainNode(ctx, { gain: -7500 })).connect(behindFilter.frequency);
   const behindLevel = new GainNode(ctx, { gain: 0.85 });
   zBus.connect(new GainNode(ctx, { gain: -0.15 })).connect(behindLevel.gain);
-  input.connect(mono).connect(panner).connect(behindFilter).connect(behindLevel);
+  // Bass below ~150 Hz hardly moves through HRTF (the head barely shadows
+  // it), so it is split off and panned plainly left-right by the same
+  // position: the bass travels with the music. 4th-order crossover.
+  const lows = [0, 1].reduce((n) => n.connect(new BiquadFilterNode(ctx, { type: 'lowpass', frequency: BASS_SPLIT, Q: Math.SQRT1_2 })), mono);
+  const highs = [0, 1].reduce((n) => n.connect(new BiquadFilterNode(ctx, { type: 'highpass', frequency: BASS_SPLIT, Q: Math.SQRT1_2 })), mono);
+  const bassPan = new StereoPannerNode(ctx, { pan: 0 });
+  xBus.connect(new GainNode(ctx, { gain: BASS_PAN })).connect(bassPan.pan);
+  input.connect(mono);
+  highs.connect(panner).connect(behindFilter).connect(behindLevel);
   const crossed = crossfeed(ctx, behindLevel, p.hrtf ? 0 : CROSSFEED);
-  crossed.connect(spatial).connect(bus);
+  crossed.connect(spatial);
+  lows.connect(bassPan).connect(spatial);
+  spatial.connect(bus);
   input.connect(original).connect(bus);
 
   // Vocals mode: the centre track plays in sync with the song. It is
@@ -383,10 +398,10 @@ async function prepareAuto() {
 
 /** (Re)build the orbit from the analysis and the current orbit time. */
 function planOrbit() {
-  const plan = Auto.plan(state.analysis, params.period);
+  const plan = Auto.plan(state.analysis, params.period, params.motion);
   state.motionAngles = Auto.angles(plan, state.buffer.duration);
   state.motionBuffer = Auto.motionBuffer(state.motionAngles, state.buffer.duration);
-  state.autoText = Auto.describe(plan);
+  state.autoText = Auto.describe(plan, params.motion);
   applyParams();
   if (state.playing) startSource(position()); // pick up the new orbit right away
   renderAutoNote();
@@ -708,6 +723,7 @@ function render() {
   }
   $('export').disabled = !state.buffer || state.separating || state.analysing || exporting;
   $('periodOut').textContent = autoActive() ? `target ${params.period}s` : `${params.period}s per circle`;
+  $('motion').disabled = !params.auto;
   $('strengthOut').textContent = `${Math.round(params.strength * 100)}%`;
   $('reverbOut').textContent = `${Math.round(params.reverb * 100)}%`;
   $('heightOut').textContent = `${Math.round(params.height * 100)}%`;
@@ -737,6 +753,7 @@ function syncControls() {
   $('hrtf').checked = params.hrtf;
   $('vocals').checked = params.vocals;
   $('auto').checked = params.auto;
+  $('motion').value = params.motion;
   $('format').value = params.format;
 }
 
@@ -777,6 +794,11 @@ function bind() {
   };
   slider('period', 'period', 1);
   $('period').addEventListener('change', () => { if (autoActive()) planOrbit(); });
+  $('motion').addEventListener('change', (e) => {
+    params.motion = e.target.value;
+    saveSettings();
+    if (autoActive()) planOrbit();
+  });
   $('auto').addEventListener('change', async (e) => {
     params.auto = e.target.checked;
     saveSettings();
