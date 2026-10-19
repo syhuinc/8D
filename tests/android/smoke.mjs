@@ -403,6 +403,23 @@ async function main() {
     const services = (await sh('dumpsys activity services io.github.syhuinc.eightd')).toString();
     assert.ok(!/LiveService/.test(services), 'LiveService is still running after Stop');
   });
+
+  if (testPlayerApk) await step('a song shared from another app opens in the converter (app open, and app closed)', async () => {
+    const shareFromPlayer = () => device.shell('am start -W -n io.github.syhuinc.eightd.testplayer/.ShareActivity');
+    const opened = async () => {
+      await page.waitForFunction(() => document.getElementById('dropTitle').textContent === 'shared tones.wav', null, { timeout: 30_000 });
+      assert.equal(await page.textContent('#dur'), '0:06');
+    };
+    await launch(); // open: arrives through onNewIntent
+    await shareFromPlayer();
+    await opened();
+    await device.shell(`am force-stop ${PKG}`); // closed: the share starts the app
+    await shareFromPlayer();
+    const webview = await device.webView({ pkg: PKG }, { timeout: 30_000 });
+    page = await webview.page();
+    await opened();
+    await device.screenshot({ path: `${OUT}/shared.png` });
+  });
 }
 
 try {

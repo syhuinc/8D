@@ -638,6 +638,39 @@ function isMono(left, right) {
   return side < mid * 1e-4;
 }
 
+// ---------- songs shared from other apps (Android app only) ----------
+
+// MainActivity copies a song shared to the app ("Share" or "Open with" in
+// Files, chat apps…) and calls this. The bytes come over in base64 pieces.
+let receivingShared = false;
+async function receiveShared() {
+  let info = null;
+  try { info = JSON.parse(Android8D.sharedInfo() || 'null'); } catch (_) { /* nothing shared */ }
+  if (!info || receivingShared) return;
+  receivingShared = true;
+  try {
+    setStatus(`Opening ${info.name}…`);
+    const parts = [];
+    const piece = 3 * 256 * 1024;
+    for (let offset = 0; offset < info.size; offset += piece) {
+      const text = atob(Android8D.readShared(offset, piece));
+      const bytes = new Uint8Array(text.length);
+      for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i);
+      parts.push(bytes);
+      await new Promise((r) => setTimeout(r, 0)); // keep the page responsive
+    }
+    Android8D.sharedDone();
+    await loadFile(new File(parts, info.name, { type: info.type }));
+  } catch (err) {
+    console.error(err);
+    setStatus("Couldn't open the shared song.");
+  } finally {
+    receivingShared = false;
+  }
+}
+window.__android8dShared = receiveShared;
+window.__android8dSharedFailed = () => setStatus("Couldn't open the shared song: the other app didn't let 8D Converter read it.");
+
 // ---------- live 8D (Android app only) ----------
 
 // Friendly names for common music apps; anything else shows its package name.

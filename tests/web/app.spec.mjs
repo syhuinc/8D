@@ -687,3 +687,32 @@ test('compare with original: plays the untouched song at the same position, then
   await expect(page.locator('#compare')).toHaveText('Compare with original');
   expect(problems).toEqual([]);
 });
+
+test('Android: a song shared from another app loads like a picked one', async ({ page }) => {
+  const wav = makeWav({ seconds: 3 });
+  await page.addInitScript((b64) => {
+    const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    window.__shared = { name: 'from chat.wav', type: 'audio/wav', size: bytes.length };
+    window.__reads = 0;
+    window.Android8D = {
+      sharedInfo: () => (window.__shared ? JSON.stringify(window.__shared) : ''),
+      readShared: (offset, length) => {
+        window.__reads++;
+        let s = '';
+        for (const b of bytes.subarray(offset, offset + length)) s += String.fromCharCode(b);
+        return btoa(s);
+      },
+      sharedDone: () => { window.__shared = null; },
+    };
+  }, Buffer.from(wav).toString('base64'));
+  await page.goto('');
+  await page.evaluate(() => window.__android8dShared());
+  await expect(page.locator('#dropTitle')).toHaveText('from chat.wav');
+  await expect(page.locator('#dur')).toHaveText('0:03');
+  await expect(page.locator('#status')).toHaveText(''); // analysis done
+  expect(await page.evaluate(() => window.__shared)).toBeNull(); // told the app it can delete its copy
+  // Called again (page reload races): nothing left to load, nothing breaks.
+  await page.evaluate(() => window.__android8dShared());
+  await page.evaluate(() => window.__android8dSharedFailed());
+  await expect(page.locator('#status')).toContainText("didn't let 8D Converter read it");
+});

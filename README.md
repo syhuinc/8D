@@ -38,6 +38,8 @@ A bare WebView can't save downloads, so the APK adds two native pieces in `MainA
 - **File picker:** handles `<input type=file>`.
 - **Save bridge:** `app.js` streams the exported file to the app in base64 chunks, then Android's *Save as* screen opens so you can choose where to save it.
 
+**Sharing a song to the app:** choose 8D Converter under "Share" or "Open with" in Files, a chat app or a music app that offers it. MainActivity copies the song to its cache (the other app's read grant only lasts while the activity runs), then the page reads it through the bridge in base64 pieces and loads it like a picked file. This works whether the app was open or closed. Streaming apps such as Spotify and Apple Music don't share their audio files, so this is for songs you have as files.
+
 The app supports Android 7.0 (API 24) and later.
 
 ### Live 8D for other apps (beta, Android 9+)
@@ -113,6 +115,7 @@ Without the signing properties the release APK is unsigned, and Android won't in
   - after Stop, everything is still.
 
   "Process all audio" is measured and reported, not required; on the emulator it measured 0.0 dB.
+- **Sharing:** the test player's `ShareActivity` shares a 6 s WAV through its own content provider (`ACTION_SEND` with a read grant), as a chat app would. It must open in the converter both while the app is open and when it was closed.
 
 WebView debugging, which the Android test relies on, is only switched on in debug builds. CI saves the APKs, the lint report and the emulator screenshots as artifacts on each run.
 
