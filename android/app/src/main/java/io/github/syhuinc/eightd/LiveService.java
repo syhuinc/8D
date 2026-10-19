@@ -57,6 +57,7 @@ public class LiveService extends Service {
     private long settingsReadAt;
     private double period = 8;  // seconds per circle, from the shared settings
     private double depth = 1;   // effect strength 0..1
+    private int frames;
 
     private static final class Attached {
         final String packageName;
@@ -158,11 +159,17 @@ public class LiveService extends Service {
                 dp.setInputGainbyChannel(1, rightGain);
                 dp.setPreEqBandByChannelIndex(0, 1, new DynamicsProcessing.EqBand(true, 20000f, leftTreble));
                 dp.setPreEqBandByChannelIndex(1, 1, new DynamicsProcessing.EqBand(true, 20000f, rightTreble));
+                if (frames % 25 == 0) {
+                    Log.d(TAG, String.format("session %d: control=%b enabled=%b set L=%.1f R=%.1f dB, reads L=%.1f R=%.1f",
+                            session, dp.hasControl(), dp.getEnabled(), leftGain, rightGain,
+                            dp.getInputGainByChannelIndex(0), dp.getInputGainByChannelIndex(1)));
+                }
             } catch (RuntimeException e) { // session ended, or another app took control
                 Log.w(TAG, "lost session " + session + ": " + e);
                 detach(session);
             }
         }
+        frames++;
         main.postDelayed(this::frame, FRAME_MS);
     }
 

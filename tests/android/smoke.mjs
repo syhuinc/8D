@@ -233,11 +233,18 @@ async function main() {
     await device.shell('cmd uimode night no');
   });
 
-  /** Test player's per-0.25 s output levels (dB) of its left (440 Hz) and right (660 Hz) tones. */
-  async function playerLevels() {
+  /**
+   * Test player's per-0.25 s levels (dB) of its left (440 Hz) and right (660 Hz)
+   * tones, measured on its own session ('') or on the device's final mix ('mix_').
+   */
+  async function playerLevels(where) {
     const log = (await device.shell('logcat -d -s TESTPLAYER:I')).toString();
-    return [...log.matchAll(/level t=([\d.]+) left440=(-?[\d.]+) right660=(-?[\d.]+)/g)]
+    return [...log.matchAll(new RegExp(`level t=([\\d.]+).*? ${where}left440=(-?[\\d.]+) ${where}right660=(-?[\\d.]+)`, 'g'))]
       .map((m) => ({ t: +m[1], l: +m[2], r: +m[3] }));
+  }
+  async function effectChain() {
+    const dump = (await device.shell('dumpsys media.audio_flinger')).toString();
+    return dump.split('\n').filter((l) => /Effect ID|Session|Name:|Enabled|state:/i.test(l) && l.length < 160).slice(0, 40).join('\n');
   }
   const swing = (xs) => Math.max(...xs) - Math.min(...xs);
   function correlation(a, b) {
@@ -262,7 +269,15 @@ async function main() {
 
     await device.shell('logcat -c');
     await sleep(16_500); // two circles at 8 s each
-    const on = await playerLevels();
+    const own = await playerLevels('');
+    const mix = await playerLevels('mix_');
+    if (own.length) console.log(`  player's own session: swing left ${swing(own.map((x) => x.l)).toFixed(1)} dB, right ${swing(own.map((x) => x.r)).toFixed(1)} dB`);
+    if (mix.length) console.log(`  final output mix:     swing left ${swing(mix.map((x) => x.l)).toFixed(1)} dB, right ${swing(mix.map((x) => x.r)).toFixed(1)} dB`);
+    console.log(`  effect chain (audio_flinger):\n${await effectChain()}`);
+    const engine = (await device.shell('logcat -d -s 8DLIVE:*')).toString().trim().split('\n').slice(-6).join('\n');
+    console.log(`  engine log:\n${engine}`);
+    const where = mix.length ? 'mix_' : '';
+    const on = mix.length ? mix : own;
     const perSecond = [];
     for (let s = 0; s < 16; s++) {
       const w = on.filter((x) => x.t >= on[0].t + s && x.t < on[0].t + s + 1);
@@ -280,7 +295,7 @@ async function main() {
     await sleep(1500);
     await device.shell('logcat -c');
     await sleep(6000);
-    const off = await playerLevels();
+    const off = await playerLevels(where);
     const offSwing = [swing(off.map((x) => x.l)), swing(off.map((x) => x.r))];
     console.log(`  live off: swing left ${offSwing[0].toFixed(1)} dB, right ${offSwing[1].toFixed(1)} dB`);
     assert.ok(offSwing[0] < 3 && offSwing[1] < 3, 'the sound kept moving after live 8D was stopped');

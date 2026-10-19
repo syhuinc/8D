@@ -54,24 +54,16 @@ public class PlayerActivity extends Activity {
     }
 
     /**
-     * The visualizer sits at the end of this session's effect chain, after
-     * any effect Live 8D attaches. It sees a mono mix, but the left tone is
-     * 440 Hz and the right one 660 Hz, so their FFT bins tell the ears apart.
+     * Measures our own output with two visualizers: one on this session (its
+     * place in the effect chain relative to Live 8D's effect is what we want
+     * to learn) and one on the device's final output mix (session 0), which is
+     * what is actually heard. Each sees a mono mix, but the left tone is 440 Hz
+     * and the right one 660 Hz, so their FFT bins tell the ears apart.
      */
     private void measure(int session) {
-        Visualizer v;
-        try {
-            v = new Visualizer(session);
-            v.setCaptureSize(Visualizer.getCaptureSizeRange()[1]);
-            v.setScalingMode(Visualizer.SCALING_MODE_AS_PLAYED);
-            v.setEnabled(true);
-        } catch (RuntimeException e) {
-            Log.e(TAG, "visualizer unavailable: " + e);
-            return;
-        }
-        int size = v.getCaptureSize();
-        double rate = v.getSamplingRate() / 1000.0;
-        byte[] fft = new byte[size];
+        Visualizer own = open(session), mix = open(0);
+        if (own == null && mix == null) return;
+        byte[] fft = new byte[Visualizer.getCaptureSizeRange()[1]];
         long t0 = System.nanoTime();
         while (true) {
             try {
@@ -79,9 +71,28 @@ public class PlayerActivity extends Activity {
             } catch (InterruptedException e) {
                 return;
             }
-            if (v.getFft(fft) != Visualizer.SUCCESS) continue;
-            Log.i(TAG, String.format("level t=%.2f left440=%.1f right660=%.1f",
-                    (System.nanoTime() - t0) / 1e9, peakDb(fft, 440, size, rate), peakDb(fft, 660, size, rate)));
+            StringBuilder line = new StringBuilder(String.format("level t=%.2f", (System.nanoTime() - t0) / 1e9));
+            for (Object[] v : new Object[][]{{"", own}, {"mix_", mix}}) {
+                Visualizer vis = (Visualizer) v[1];
+                if (vis == null || vis.getFft(fft) != Visualizer.SUCCESS) continue;
+                double rate = vis.getSamplingRate() / 1000.0;
+                line.append(String.format(" %sleft440=%.1f %sright660=%.1f",
+                        v[0], peakDb(fft, 440, fft.length, rate), v[0], peakDb(fft, 660, fft.length, rate)));
+            }
+            Log.i(TAG, line.toString());
+        }
+    }
+
+    private static Visualizer open(int session) {
+        try {
+            Visualizer v = new Visualizer(session);
+            v.setCaptureSize(Visualizer.getCaptureSizeRange()[1]);
+            v.setScalingMode(Visualizer.SCALING_MODE_AS_PLAYED);
+            v.setEnabled(true);
+            return v;
+        } catch (RuntimeException e) {
+            Log.e(TAG, "visualizer on session " + session + " unavailable: " + e);
+            return null;
         }
     }
 
