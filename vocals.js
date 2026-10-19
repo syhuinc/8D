@@ -11,11 +11,19 @@
 // Limits: anything else mixed dead centre in the vocal range (often snare,
 // lead guitar) stays with the voice, and mono songs barely separate at all.
 // Proper separation needs a neural model; this is the fast, offline version.
+//
+// The same pass also finds the song's "ambience": the part of left-minus-right
+// that isn't just a panned copy of left-plus-right. That is stereo reverb,
+// wide pads, chorus. 8D moves a mono mix of the song, in which this part
+// cancels out and is lost; app.js plays it back still, as wide as in the
+// original. Instruments panned to one side are not ambience: they are a
+// scaled copy of the mid signal, so they stay in the moving mix.
 
 const Vocals = (() => {
   const N = 2048;          // FFT size (~46 ms at 44.1 kHz)
   const HOP = N / 4;       // 75 % overlap
   const SMOOTH = 0.6;      // per-frame smoothing of the channel statistics
+  const SMOOTH_AMB = 0.9;  // longer (~0.1 s) for the ambience: coherence needs more frames to judge
   const BAND = [100, 150, 9000, 12000]; // vocal band with soft edges (Hz)
 
   function makeFft(n) {
@@ -74,18 +82,21 @@ const Vocals = (() => {
   }
 
   /**
-   * Returns the centre (vocal) track as a mono Float32Array, scaled like a
-   * Web Audio stereo→mono downmix, i.e. relative to (L + R) / 2.
+   * Returns { centre, ambience }, two mono Float32Arrays.
+   * centre: the vocal track, scaled like a Web Audio stereo→mono downmix,
+   * i.e. relative to (L + R) / 2.
+   * ambience: relative to (L - R) / 2; play it +1 left and -1 right.
    * Yields to the browser regularly; onProgress receives 0..1.
    * focus (0..1): how alike L and R must be to count as centre. 0.5 is the
    * default; higher keeps only near-identical sound (less leaks into the
    * voice), lower also catches slightly off-centre vocals.
    */
-  async function extractCenter(left, right, sampleRate, onProgress = () => {}, { focus = 0.5 } = {}) {
+  async function separate(left, right, sampleRate, onProgress = () => {}, { focus = 0.5 } = {}) {
     const simLo = 0.5 + 0.4 * focus;           // L/R similarity below this: not centre
     const simHi = Math.min(0.99, simLo + 0.25); // ... above this: fully centre
     const len = left.length;
     const out = new Float32Array(len);
+    const amb = new Float32Array(len);
     const fft = makeFft(N);
     const half = N / 2;
     const win = new Float64Array(N);
@@ -99,6 +110,11 @@ const Vocals = (() => {
     const im = new Float64Array(N);
     const cRe = new Float64Array(half + 1);
     const cIm = new Float64Array(half + 1);
+    const aRe = new Float64Array(half + 1);
+    const aIm = new Float64Array(half + 1);
+    const smm = new Float64Array(half + 1);   // mid power
+    const ssmRe = new Float64Array(half + 1); // side × conj(mid)
+    const ssmIm = new Float64Array(half + 1);
 
     let lastYield = performance.now();
     for (let start = HOP - N; start < len; start += HOP) {
@@ -125,16 +141,31 @@ const Vocals = (() => {
         mask = mask * mask * (3 - 2 * mask) * band[k];
         cRe[k] = (mask * (lr + rr)) / 2;
         cIm[k] = (mask * (li + ri)) / 2;
+
+        // Ambience: side minus its best fit from mid (least squares). A panned
+        // source is a scaled copy of the mid and leaves nothing; reverb and
+        // other decorrelated sound don't fit and remain.
+        const mr = (lr + rr) / 2, mi = (li + ri) / 2, sr = (lr - rr) / 2, si = (li - ri) / 2;
+        smm[k] = SMOOTH_AMB * smm[k] + (1 - SMOOTH_AMB) * (mr * mr + mi * mi);
+        ssmRe[k] = SMOOTH_AMB * ssmRe[k] + (1 - SMOOTH_AMB) * (sr * mr + si * mi);
+        ssmIm[k] = SMOOTH_AMB * ssmIm[k] + (1 - SMOOTH_AMB) * (si * mr - sr * mi);
+        const gRe = ssmRe[k] / (smm[k] + 1e-20), gIm = ssmIm[k] / (smm[k] + 1e-20);
+        aRe[k] = sr - (gRe * mr - gIm * mi);
+        aIm[k] = si - (gRe * mi + gIm * mr);
       }
 
-      // Hermitian spectrum → real centre signal.
-      for (let k = 0; k <= half; k++) { re[k] = cRe[k]; im[k] = cIm[k]; }
-      im[0] = 0; im[half] = 0;
-      for (let k = half + 1; k < N; k++) { re[k] = cRe[N - k]; im[k] = -cIm[N - k]; }
+      // Both outputs are real, so one inverse FFT of centre + i·ambience gives
+      // the centre in the real part and the ambience in the imaginary part.
+      cIm[0] = 0; cIm[half] = 0; aIm[0] = 0; aIm[half] = 0;
+      for (let k = 0; k <= half; k++) { re[k] = cRe[k] - aIm[k]; im[k] = cIm[k] + aRe[k]; }
+      for (let k = half + 1; k < N; k++) { re[k] = cRe[N - k] + aIm[N - k]; im[k] = -cIm[N - k] + aRe[N - k]; }
       fft(re, im, true);
       for (let i = 0; i < N; i++) {
         const idx = start + i;
-        if (idx >= 0 && idx < len) out[idx] += re[i] * win[i] * olaGain;
+        if (idx >= 0 && idx < len) {
+          out[idx] += re[i] * win[i] * olaGain;
+          amb[idx] += im[i] * win[i] * olaGain;
+        }
       }
 
       if (performance.now() - lastYield > 50) {
@@ -144,8 +175,13 @@ const Vocals = (() => {
       }
     }
     onProgress(1);
-    return out;
+    return { centre: out, ambience: amb };
   }
 
-  return { extractCenter, makeFft };
+  /** The centre (vocal) track only; see separate. */
+  async function extractCenter(left, right, sampleRate, onProgress, options) {
+    return (await separate(left, right, sampleRate, onProgress, options)).centre;
+  }
+
+  return { separate, extractCenter, makeFft };
 })();

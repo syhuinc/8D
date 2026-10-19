@@ -71,6 +71,8 @@ const state = {
   orbit: { basePhase: 0, baseTime: 0, freq: 1 / params.period },
   vocalBuffer: null,  // mono centre track of the current song (see vocals.js)
   vocalSource: null,
+  ambienceBuffer: null, // the song's stereo ambience, which 8D's mono mix loses (see vocals.js)
+  ambienceSource: null,
   vocalJob: 0,
   separating: false,
   analysis: null,     // beat and loudness of the current song (auto.js)
@@ -101,11 +103,12 @@ function makeImpulse(ctx, seconds, decay, channels = 2) {
 }
 
 const CROSSFEED = 0.35; // about -9 dB
-// The moving music comes out about 3 dB quieter than the song (it is summed
-// to mono, and HRTF and the behind-the-head cues take some level), measured
-// on stereo pink noise. Made up here, so 8D isn't quieter than the original:
-// a quieter version sounds worse side by side even when it isn't.
-const EIGHTD_MAKEUP = 1.4; // +2.9 dB
+// The moving music comes out quieter than the song (it is summed to mono,
+// and HRTF and the behind-the-head cues take some level). Made up here,
+// measured on stereo pink noise with the ambience track playing, so 8D isn't
+// quieter than the original: a quieter version sounds worse side by side
+// even when it isn't.
+const EIGHTD_MAKEUP = 1.3; // +2.3 dB
 const BASS_SPLIT = 150;  // Hz: below this the bass is panned plainly (see buildGraph)
 const BASS_PAN = 0.85;   // how far the bass swings (1 = fully into one ear)
 
@@ -200,6 +203,16 @@ function buildGraph(ctx, p) {
   spatial.connect(bus);
   input.connect(original).connect(bus);
 
+  // Ambience: the song's reverb and width cancel out in the mono mix that
+  // moves, so they play back still, +1 left and -1 right, as wide as in the
+  // original (vocals.js finds them). Without this, 8D deleted them.
+  const ambienceIn = new GainNode(ctx, { channelCount: 1, channelCountMode: 'explicit' });
+  const ambience = new GainNode(ctx, { gain: p.strength });
+  const wide = new ChannelMergerNode(ctx, { numberOfInputs: 2 });
+  ambienceIn.connect(wide, 0, 0);
+  ambienceIn.connect(new GainNode(ctx, { gain: -1 })).connect(wide, 0, 1);
+  wide.connect(ambience).connect(bus);
+
   // Vocals mode: the centre track plays in sync with the song. It is
   // subtracted from what orbits and sent straight to the middle instead.
   const vocalIn = new GainNode(ctx);
@@ -227,7 +240,7 @@ function buildGraph(ctx, p) {
   vocal.connect(new ConvolverNode(ctx, { buffer: makeImpulse(ctx, 2.8, 2.5, 1) })).connect(vocalWet).connect(master);
 
   return {
-    input, vocalIn, motionIn, panner, oscillators: [oscX, oscZ, oscY], gainX, gainZ, gainY, motionY, spatial, vocal, original, dry, wet, vocalDry, vocalWet, bass, bleed: crossed.bleed,
+    input, vocalIn, motionIn, ambienceIn, ambience, panner, oscillators: [oscX, oscZ, oscY], gainX, gainZ, gainY, motionY, spatial, vocal, original, dry, wet, vocalDry, vocalWet, bass, bleed: crossed.bleed,
     ...out,
     start(when) { this.oscillators.forEach((o) => o.start(when)); },
     stop() { this.oscillators.forEach((o) => o.stop()); },
@@ -368,7 +381,8 @@ function buildSpatialGraph(ctx, p) {
   master.connect(bass).connect(limiter);
 
   return {
-    input, vocalIn, motionIn: new GainNode(ctx), ...outputStage(ctx, input, limiter),
+    // Spatial's front speakers get left and right as they are, ambience included.
+    input, vocalIn, motionIn: new GainNode(ctx), ambienceIn: new GainNode(ctx), ...outputStage(ctx, input, limiter),
     start() {}, stop() {},
     apply(q, smooth) {
       smooth(spatial.gain, q.strength);
@@ -443,6 +457,7 @@ function applyParams() {
   smooth(g.motionY.gain, auto ? params.height : 0);
   smooth(g.spatial.gain, params.strength * EIGHTD_MAKEUP);
   smooth(g.vocal.gain, params.strength);
+  smooth(g.ambience.gain, params.strength);
   smooth(g.original.gain, 1 - params.strength);
   smooth(g.dry.gain, 1 - params.reverb * 0.4);
   smooth(g.wet.gain, params.reverb);
@@ -482,6 +497,11 @@ function startSource(offset) {
     state.vocalSource.connect(state.graph.vocalIn);
     state.vocalSource.start(ctx.currentTime, offset); // same instant as the song: sample-aligned
   }
+  if (params.mode !== 'spatial' && state.ambienceBuffer) {
+    state.ambienceSource = new AudioBufferSourceNode(ctx, { buffer: state.ambienceBuffer });
+    state.ambienceSource.connect(state.graph.ambienceIn);
+    state.ambienceSource.start(ctx.currentTime, offset);
+  }
   if (autoActive()) {
     state.motionSource = new AudioBufferSourceNode(ctx, { buffer: state.motionBuffer });
     state.motionSource.connect(state.graph.motionIn);
@@ -492,13 +512,14 @@ function startSource(offset) {
 function stopSource() {
   if (!state.source) return;
   state.sourceToken++;
-  for (const src of [state.source, state.vocalSource, state.motionSource]) {
+  for (const src of [state.source, state.vocalSource, state.ambienceSource, state.motionSource]) {
     if (!src) continue;
     try { src.stop(); } catch (_) { /* already stopped */ }
     src.disconnect();
   }
   state.source = null;
   state.vocalSource = null;
+  state.ambienceSource = null;
   state.motionSource = null;
 }
 
@@ -537,6 +558,7 @@ async function loadFile(file) {
     stopSource();
     state.buffer = buffer;
     state.vocalBuffer = null;
+    state.ambienceBuffer = null;
     state.analysis = null;
     state.motionAngles = null;
     state.motionBuffer = null;
@@ -549,7 +571,7 @@ async function loadFile(file) {
     setStatus('');
     render();
     await prepareAuto();
-    if (params.vocals) await prepareVocals();
+    await prepareVocals(); // also finds the ambience, which 8D needs either way
   } catch (err) {
     console.error(err);
     setStatus("Couldn't read that file. Your browser may not support this audio format — try MP3 or WAV.");
@@ -611,18 +633,22 @@ async function prepareVocals() {
   state.separating = true;
   render();
   try {
-    const centre = await Vocals.extractCenter(left, right, buffer.sampleRate, (f) => {
-      if (job === state.vocalJob) setStatus(`Finding the vocals… ${Math.round(f * 100)}%`);
+    const { centre, ambience } = await Vocals.separate(left, right, buffer.sampleRate, (f) => {
+      if (job === state.vocalJob) setStatus(`${params.vocals ? 'Finding the vocals' : 'Reading the stereo mix'}… ${Math.round(f * 100)}%`);
     }, { focus: params.vocalFocus });
     if (job !== state.vocalJob) return; // a newer song or request took over
-    const vb = new AudioBuffer({ numberOfChannels: 1, length: buffer.length, sampleRate: buffer.sampleRate });
-    vb.copyToChannel(centre, 0);
-    state.vocalBuffer = vb;
+    const mono = (data) => {
+      const b = new AudioBuffer({ numberOfChannels: 1, length: buffer.length, sampleRate: buffer.sampleRate });
+      b.copyToChannel(data, 0);
+      return b;
+    };
+    state.vocalBuffer = mono(centre);
+    state.ambienceBuffer = mono(ambience);
     $('vocalsNote').textContent = isMono(left, right)
       ? "This song is mono (both ears identical), so the voice can't be separated: only bass and cymbals will move."
       : VOCALS_HINT;
     setStatus('');
-    if (state.playing && params.vocals) startSource(position());
+    if (state.playing) startSource(position());
   } finally {
     if (job === state.vocalJob) state.separating = false;
     render();
@@ -773,6 +799,11 @@ async function exportFile() {
       const vocalSrc = new AudioBufferSourceNode(off, { buffer: state.vocalBuffer });
       vocalSrc.connect(g.vocalIn);
       vocalSrc.start(0);
+    }
+    if (params.mode !== 'spatial' && state.ambienceBuffer) {
+      const ambienceSrc = new AudioBufferSourceNode(off, { buffer: state.ambienceBuffer });
+      ambienceSrc.connect(g.ambienceIn);
+      ambienceSrc.start(0);
     }
     if (autoActive()) {
       const motionSrc = new AudioBufferSourceNode(off, { buffer: state.motionBuffer });

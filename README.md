@@ -12,7 +12,7 @@ Open `index.html` in a browser, or host the folder on any static host. For GitHu
 2. Press play and adjust the sliders while you listen through headphones.
 3. Pick a format (MP3 at 320, 192 or 128 kbps, or lossless WAV) and click **Download 8D version**.
 
-**Compare with original** (under the player) switches between the effect and the untouched song at the same spot, so you can judge the difference. Both effects are level-matched to the song, measured on a stereo pink-noise mix: 8D within 0.1 dB, Spatial within 1 dB. Before this, 8D came out about 3 dB quieter than the song, and a quieter version sounds worse side by side even when it isn't. Very wide stereo still comes out about 2 dB quieter in 8D, because 8D sums the song to mono before moving it.
+**Compare with original** (under the player) switches between the effect and the untouched song at the same spot, so you can judge the difference. Both effects are level-matched to the song, measured on a stereo pink-noise mix: 8D and Spatial within about 1 dB. Before this, 8D came out about 3 dB quieter than the song, and a quieter version sounds worse side by side even when it isn't. Very wide stereo still comes out about 2 dB quieter in 8D, because 8D sums the song to mono before moving it.
 
 **Presets** (Classic 8D, Slow & dreamy, Fast spin, Concert hall, Bass 8D) set the sliders in one tap; the active one is highlighted. All settings are remembered on the device.
 
@@ -134,6 +134,8 @@ WebView debugging, which the Android test relies on, is only switched on in debu
 The speakers' total is trimmed to the song's loudness (within about 1 dB on pink noise). Effect strength blends with the original stereo.
 
 What it is not: Apple's Spatial Audio plays songs mixed in Dolby Atmos, where each instrument is a separate object with its own position, and with AirPods it tracks your head. This mode starts from an ordinary stereo file, so it can only spread what the stereo mix contains, and it has no head tracking. Whether it sounds "out of your head" varies from person to person, because HRTF is a generic head; that can't be measured by the tests. It is file conversion only: Live 8D stays 8D.
+
+**Ambience** (also `vocals.js`, in the same pass): 8D moves a mono mix of the song, and whatever is opposite in the two channels cancels out of a mono mix. That is stereo reverb, wide pads, chorus. Before version 1.12 the export deleted it: in a test, an out-of-phase pad went from 82 dB to -38 dB. Now, in each frequency bin, the side signal (L - R) / 2 is split by least squares. The part that is a scaled copy of the mid (L + R) / 2 is a panned instrument and stays in the moving mix. The rest is ambience, which plays still, +1 left and -1 right, as wide as in the original. Measured: a panned source gives no ambience, fully decorrelated sound keeps 79% of its side energy (-1 dB), and a pure side signal keeps all of it. The pad from the test comes through within 3 dB. Because it shares the inverse FFT with the centre track, it adds no measurable time, but the pass now also runs with vocals mode off (about 2.3 s per minute of audio on a desktop; phones are slower). Spatial mode doesn't need it: its front speakers get left and right as they are.
 
 **Follow the music** (`auto.js`) works like this:
 - **Onsets.** The song is analysed in 1024-point frames. Onsets are the rise in loudness across 12 log-spaced bands, from 30 Hz to 10 kHz. Bands rather than FFT bins keep random noise from swamping the drums.

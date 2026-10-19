@@ -628,6 +628,12 @@ test('8D and Spatial are as loud as the song (within 1.5 dB on a typical stereo 
       src.connect(g.input);
       g.start(0);
       src.start(0);
+      // As the app plays it: with the song's ambience track (vocals.js).
+      const amb = new AudioBuffer({ numberOfChannels: 1, length: sr * secs, sampleRate: sr });
+      amb.copyToChannel((await Vocals.separate(left, right, sr)).ambience, 0);
+      const ambSrc = new AudioBufferSourceNode(off, { buffer: amb });
+      ambSrc.connect(g.ambienceIn);
+      ambSrc.start(0);
       const out = await off.startRendering();
       let e = 0, e0 = 0;
       for (let c = 0; c < 2; c++) {
@@ -715,4 +721,27 @@ test('Android: a song shared from another app loads like a picked one', async ({
   await page.evaluate(() => window.__android8dShared());
   await page.evaluate(() => window.__android8dSharedFailed());
   await expect(page.locator('#status')).toContainText("didn't let 8D Converter read it");
+});
+
+test('8D keeps the song\'s width: an out-of-phase pad, which a mono mix cancels, survives the export', async ({ page }) => {
+  // Centred voice-like tone at 500 Hz, and a "pad" at 1200 Hz that is opposite in the two channels.
+  const sr = 44100, seconds = 8, frames = sr * seconds;
+  const wav = Buffer.alloc(44 + frames * 4);
+  wav.write('RIFF', 0); wav.writeUInt32LE(36 + frames * 4, 4); wav.write('WAVE', 8);
+  wav.write('fmt ', 12); wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(2, 22);
+  wav.writeUInt32LE(sr, 24); wav.writeUInt32LE(sr * 4, 28); wav.writeUInt16LE(4, 32); wav.writeUInt16LE(16, 34);
+  wav.write('data', 36); wav.writeUInt32LE(frames * 4, 40);
+  for (let i = 0; i < frames; i++) {
+    const t = i / sr, voice = 0.25 * Math.sin(2 * Math.PI * 500 * t), pad = 0.15 * Math.sin(2 * Math.PI * 1200 * t);
+    wav.writeInt16LE(Math.round((voice + pad) * 32767), 44 + i * 4);
+    wav.writeInt16LE(Math.round((voice - pad) * 32767), 46 + i * 4);
+  }
+  await page.goto('');
+  await loadSong(page, { name: 'pad.wav', mimeType: 'audio/wav', buffer: wav });
+  const { bytes } = await exportAndDownload(page, 'wav');
+  const before = await earLevelsInPage(page, wav, 1200, 2, 6);
+  const after = await earLevelsInPage(page, bytes, 1200, 2, 6);
+  for (const ear of ['left', 'right']) {
+    expect(Math.abs(after[ear] - before[ear]), `pad in the ${ear} ear: ${before[ear].toFixed(1)} → ${after[ear].toFixed(1)} dB`).toBeLessThan(3);
+  }
 });
