@@ -1,0 +1,25 @@
+// Test-only app (never shipped): behaves like a music app that supports
+// equalisers. It plays 440 Hz in the left ear and 660 Hz in the right,
+// announces its audio session, and logs how loud each tone comes out, so
+// the emulator test can check that Live 8D really moves the sound.
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'io.github.syhuinc.eightd.testplayer'
+    compileSdk 36
+
+    defaultConfig {
+        applicationId 'io.github.syhuinc.eightd.testplayer'
+        minSdk 28
+        targetSdk 36
+        versionCode 1
+        versionName '1.0'
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}

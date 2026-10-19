@@ -42,6 +42,7 @@ public class MainActivity extends Activity {
     private static final String START_URL = "file:///android_asset/www/index.html";
     private static final int REQUEST_PICK = 1;
     private static final int REQUEST_SAVE = 2;
+    private static final int REQUEST_LISTEN = 5;
 
     private WebView web;
     private ValueCallback<Uri[]> pickCallback;
@@ -194,6 +195,17 @@ public class MainActivity extends Activity {
         }
     }
 
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != REQUEST_LISTEN) return;
+        boolean granted = grantResults.length > 0 && grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED;
+        if (granted && Build.VERSION.SDK_INT >= 28) LiveService.permissionGranted();
+        // Asked once and refused for good: Android no longer shows the question, only Settings can allow it.
+        boolean askable = shouldShowRequestPermissionRationale(android.Manifest.permission.RECORD_AUDIO);
+        web.evaluateJavascript("window.__android8dListen && window.__android8dListen(" + granted + ", " + askable + ")", null);
+    }
+
     private boolean copy(File source, Uri target) {
         try (InputStream in = new FileInputStream(source);
              OutputStream out = getContentResolver().openOutputStream(target)) {
@@ -220,6 +232,63 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public boolean isDarkTheme() {
             return MainActivity.this.isDarkTheme();
+        }
+
+        // Live 8D for other apps (see LiveService). Android 9+ (DynamicsProcessing).
+        @JavascriptInterface
+        public boolean liveSupported() {
+            return Build.VERSION.SDK_INT >= 28;
+        }
+
+        @JavascriptInterface
+        public void liveStart() {
+            if (Build.VERSION.SDK_INT < 28) return;
+            runOnUiThread(() -> {
+                if (Build.VERSION.SDK_INT >= 33
+                        && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                    requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 4); // for the Stop notification
+                }
+                startForegroundService(new Intent(MainActivity.this, LiveService.class));
+            });
+        }
+
+        @JavascriptInterface
+        public void liveStop() {
+            stopService(new Intent(MainActivity.this, LiveService.class));
+        }
+
+        // "Follow the song": Live 8D listens to the music app's sound to find the beat.
+        @JavascriptInterface
+        public boolean canListen() {
+            return checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED;
+        }
+
+        @JavascriptInterface
+        public void requestListen() {
+            runOnUiThread(() -> requestPermissions(new String[]{android.Manifest.permission.RECORD_AUDIO}, REQUEST_LISTEN));
+        }
+
+        @JavascriptInterface
+        public void openAppSettings() {
+            runOnUiThread(() -> startActivity(new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.fromParts("package", getPackageName(), null))));
+        }
+
+        @JavascriptInterface
+        public String liveStatus() {
+            return Build.VERSION.SDK_INT >= 28 ? LiveService.statusJson() : "{\"running\":false,\"apps\":[]}";
+        }
+
+        // Remembered settings. SharedPreferences + commit() reach disk right away;
+        // WebView localStorage is flushed lazily and lost if the app is killed soon after.
+        @JavascriptInterface
+        public String loadSettings() {
+            return getSharedPreferences("settings", MODE_PRIVATE).getString("json", "");
+        }
+
+        @JavascriptInterface
+        public void saveSettings(String json) {
+            getSharedPreferences("settings", MODE_PRIVATE).edit().putString("json", json).commit();
         }
 
         @JavascriptInterface

@@ -2,6 +2,16 @@
 <!-- No INTERNET permission: the whole app runs offline from bundled files. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Live 8D only: attach an audio effect to music apps' sessions, as equaliser apps do. -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Live 8D "Follow the song" only, asked for when switched on: hear the music app's
+         sound (an audio Visualizer) to find the beat. Nothing is recorded or saved. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+
     <application
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
@@ -20,5 +30,14 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".LiveService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse|microphone">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Applies a live 8D audio effect to the sessions music apps announce for equalizers" />
+        </service>
     </application>
 </manifest>

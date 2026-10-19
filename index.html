@@ -40,10 +40,48 @@
       <canvas id="orbit" width="240" height="240" aria-label="Sound position, seen from above"></canvas>
     </section>
 
-    <section id="controls" class="card" hidden>
+    <section id="live" class="card" hidden>
+      <h2>Live 8D for other apps <span class="badge">beta</span></h2>
+      <p class="hint flush">Turn it on, then press play in your music app. With "Keep vocals in the center" on, the voice stays in the middle and the bass and highs move around you; turn it off to move everything. Lighter than converting a file. Uses your Orbit time and Effect strength below.</p>
+      <div class="row live-row">
+        <button id="liveToggle" class="primary" type="button">Start live 8D</button>
+        <span id="liveStatus" class="status" role="status">Off</span>
+      </div>
+      <label class="check live-follow"><input id="liveFollow" type="checkbox"> Follow the song (move with the beat)</label>
+      <p id="liveFollowNote" class="hint">Android will ask to let 8D Converter record audio. It only listens to your music app's sound to find the kick and bass hits; nothing is recorded or saved, and the microphone isn't used. Uses the Movement setting below. Some apps don't allow listening; then the log says so and the sound circles on its own.</p>
+      <label class="check live-all"><input id="liveAll" type="checkbox"> Process all audio (experiment)</label>
+      <p class="hint">Only if your music app never appears in the log below. Many phones ignore this (it did nothing on our test device): if nothing moves, turn it off.</p>
+      <details id="liveLogBox">
+        <summary>What Live 8D sees</summary>
+        <ol id="liveLog" class="live-log"></ol>
+      </details>
+    </section>
+
+    <section id="controls" class="card">
+      <div class="ctl">
+        <label for="mode">Effect</label>
+        <select id="mode">
+          <option value="8d">8D: the music travels around your head</option>
+          <option value="spatial">Spatial: the music surrounds you, like a room (no movement)</option>
+        </select>
+      </div>
+      <p id="modeNote" class="hint flush-left"></p>
+      <div id="orbitControls">
+      <div id="presets" class="presets" role="group" aria-label="Presets"></div>
       <div class="ctl">
         <label for="period">Orbit time <output id="periodOut"></output></label>
         <input id="period" type="range" min="2" max="20" step="0.5" value="8">
+      </div>
+      <label class="check vocals"><input id="auto" type="checkbox" checked> Follow the music (sync to the beat, faster in loud parts)</label>
+      <div class="ctl indent">
+        <label for="motion">Movement</label>
+        <select id="motion">
+          <option value="scatter">Here &amp; there with the beat</option>
+          <option value="bounce">Left–right with the beat</option>
+          <option value="circle">Smooth circle</option>
+        </select>
+      </div>
+      <p id="autoNote" class="hint"></p>
       </div>
       <div class="ctl">
         <label for="strength">Effect strength <output id="strengthOut"></output></label>
@@ -54,8 +92,19 @@
         <input id="reverb" type="range" min="0" max="100" value="30">
       </div>
       <div class="ctl">
-        <label for="height">Height wobble <output id="heightOut"></output></label>
+        <label for="height"><span id="heightName">Height wobble</span> <output id="heightOut"></output></label>
         <input id="height" type="range" min="0" max="100" value="0">
+      </div>
+      <div class="ctl">
+        <label for="bass">Bass boost <output id="bassOut"></output></label>
+        <input id="bass" type="range" min="0" max="12" step="1" value="0">
+      </div>
+      <label class="check vocals"><input id="vocals" type="checkbox" checked> Keep vocals in the center (only the music orbits)</label>
+      <p id="vocalsNote" class="hint">Works on stereo songs. Other sounds mixed dead-center, often snare or lead guitar, stay in the middle with the voice.</p>
+      <div id="vocalFocusRow" class="ctl indent">
+        <label for="vocalFocus">Vocal strictness <output id="vocalFocusOut"></output></label>
+        <input id="vocalFocus" type="range" min="0" max="100" value="50">
+        <p class="hint flush">Instruments stuck in the middle? Go stricter. Voice drifting? Go looser.</p>
       </div>
       <label class="check"><input id="hrtf" type="checkbox" checked> 3D headphone mode (HRTF)</label>
 
@@ -78,6 +127,8 @@
       <p>MP3 encoding uses <a href="https://github.com/zhuker/lamejs">lamejs</a>, a JavaScript port of <a href="https://lame.sourceforge.io/">LAME</a> (LGPL).</p>
     </footer>
   </main>
+  <script src="vocals.js"></script>
+  <script src="auto.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

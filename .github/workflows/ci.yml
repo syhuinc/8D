@@ -32,7 +32,7 @@ jobs:
   android:
     name: Android build + emulator test
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30 # a normal run takes ~10; fail fast if something hangs
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -47,7 +47,7 @@ jobs:
 
       - name: Build APKs and run lint
         working-directory: android
-        run: ./gradlew --no-daemon assembleDebug assembleRelease lintRelease
+        run: ./gradlew --no-daemon :app:assembleDebug :app:assembleRelease :app:lintRelease :testplayer:assembleDebug
 
       - uses: actions/upload-artifact@v4
         with:
@@ -75,7 +75,7 @@ jobs:
           disable-animations: true
           # Audio stays enabled (no -no-audio) so playback can be tested.
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-boot-anim -camera-back none
-          script: node tests/android/smoke.mjs android/app/build/outputs/apk/debug/app-debug.apk
+          script: node tests/android/smoke.mjs android/app/build/outputs/apk/debug/app-debug.apk android/testplayer/build/outputs/apk/debug/testplayer-debug.apk
 
       - uses: actions/upload-artifact@v4
         if: always()
