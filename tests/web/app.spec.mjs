@@ -497,3 +497,102 @@ test('the bass moves too: at the side, a 60 Hz tone is much louder in the near e
   expect(atRight, `at the right: near ear +${atRight.toFixed(1)} dB; at the left: +${atLeft.toFixed(1)} dB`).toBeGreaterThan(8);
   expect(atLeft).toBeGreaterThan(8);
 });
+
+// Spatial mode (buildSpatialGraph)
+
+test('spatial: the voice stays centred, guitar and piano keep their sides, and nothing moves', async ({ page }) => {
+  await page.goto('');
+  await loadSong(page, mixFile());
+  await page.selectOption('#mode', 'spatial');
+  await expect(page.locator('#export')).toHaveText('Download Spatial version');
+  const { name, bytes } = await exportAndDownload(page, 'wav');
+  expect(name).toBe('mix (Spatial).wav');
+  const p = await placementInPage(page, bytes, [MIX.voice[1], MIX.guitar[0], MIX.piano[0]]);
+  expect(isCentred(p[MIX.voice[1]]), `voice ${p[MIX.voice[1]]}`).toBe(true);
+  // Guitar is mixed left, piano right: they stay there every second (no orbit).
+  expect((p[MIX.guitar[0]].match(/L/g) || []).length, `guitar ${p[MIX.guitar[0]]}`).toBeGreaterThanOrEqual(9);
+  expect((p[MIX.piano[0]].match(/R/g) || []).length, `piano ${p[MIX.piano[0]]}`).toBeGreaterThanOrEqual(9);
+  const diffs = [];
+  for (let t = 1; t < 9; t++) {
+    const e = await earLevelsInPage(page, bytes, MIX.guitar[0], t, t + 1);
+    diffs.push(e.left - e.right);
+  }
+  expect(Math.max(...diffs) - Math.min(...diffs), `guitar left-right per second: ${diffs.map((d) => d.toFixed(1))}`).toBeLessThan(1);
+});
+
+test('spatial engine: as loud as the song, one-sided sounds reach both ears, symmetric, height adds treble', async ({ page }) => {
+  await page.goto('');
+  const r = await page.evaluate(async () => {
+    const sr = 44100, secs = 5;
+    let seed = 7;
+    const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296) * 2 - 1;
+    const pink = () => { // Paul Kellet's filter: roughly music's spectrum
+      const a = new Float32Array(sr * secs);
+      let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+      for (let i = 0; i < a.length; i++) {
+        const w = rnd();
+        b0 = 0.99886 * b0 + w * 0.0555179; b1 = 0.99332 * b1 + w * 0.0750759; b2 = 0.969 * b2 + w * 0.153852;
+        b3 = 0.8665 * b3 + w * 0.3104856; b4 = 0.55 * b4 + w * 0.5329522; b5 = -0.7616 * b5 - w * 0.016898;
+        a[i] = 0.03 * (b0 + b1 + b2 + b3 + b4 + b5 + b6 + w * 0.5362); b6 = w * 0.115926;
+      }
+      return a;
+    };
+    const n1 = pink(), n2 = pink();
+    const run = async (left, right, extra = {}) => {
+      const off = new OfflineAudioContext({ numberOfChannels: 2, length: sr * secs, sampleRate: sr });
+      const g = buildGraph(off, { ...params, mode: 'spatial', strength: 1, reverb: 0.3, height: 0, bass: 0, hrtf: true, ...extra });
+      const B = new AudioBuffer({ numberOfChannels: 2, length: sr * secs, sampleRate: sr });
+      B.copyToChannel(left, 0);
+      B.copyToChannel(right, 1);
+      const src = new AudioBufferSourceNode(off, { buffer: B });
+      src.connect(g.input);
+      src.start(0);
+      if (extra.trebleOnly) { // measure only above 5 kHz
+        g.output.disconnect();
+        g.output.connect(new BiquadFilterNode(off, { type: 'highpass', frequency: 5000 })).connect(off.destination);
+      }
+      const out = await off.startRendering();
+      const energy = (x) => { let s = 0; for (let i = sr; i < 4 * sr; i++) s += x[i] ** 2; return s; };
+      const l = energy(out.getChannelData(0)), rr = energy(out.getChannelData(1));
+      return { ild: 10 * Math.log10(l / rr), loud: 10 * Math.log10((l + rr) / (energy(left) + energy(right))), total: l + rr };
+    };
+    const silent = new Float32Array(sr * secs);
+    const stereo = await run(n1, n2);
+    const unprocessed = await run(n1, n2, { strength: 0 });
+    return {
+      loud: stereo.loud - unprocessed.loud, // relative, so the limiter's make-up gain cancels out
+      leftIld: (await run(n1, silent)).ild,
+      rightIld: (await run(silent, n1)).ild,
+      heightTreble: 10 * Math.log10((await run(n1, n2, { height: 1, trebleOnly: true })).total / (await run(n1, n2, { trebleOnly: true })).total),
+    };
+  });
+  expect(Math.abs(r.loud), `loudness change ${r.loud.toFixed(1)} dB`).toBeLessThan(2);
+  // Original: a left-only sound is in the left ear only. Spatial: from a speaker front-left, so both ears hear it.
+  expect(r.leftIld, `left-only sound: ${r.leftIld.toFixed(1)} dB louder in the left ear`).toBeGreaterThan(3);
+  expect(r.leftIld).toBeLessThan(15);
+  expect(Math.abs(r.leftIld + r.rightIld), `left ${r.leftIld.toFixed(1)}, right ${r.rightIld.toFixed(1)}`).toBeLessThan(1);
+  expect(r.heightTreble, `height raised the treble by ${r.heightTreble.toFixed(1)} dB`).toBeGreaterThan(1);
+});
+
+test('spatial: the orbit settings hide, the choice is remembered, and switching while playing works', async ({ page }) => {
+  const problems = collectProblems(page);
+  await page.goto('');
+  await expect(page.locator('#orbitControls')).toBeVisible();
+  await loadSong(page, mixFile());
+  await page.click('#play');
+  await page.selectOption('#mode', 'spatial');
+  await expect(page.locator('#orbitControls')).toBeHidden();
+  await expect(page.locator('#heightName')).toHaveText('Height (sound from above)');
+  await expect(page.locator('#modeNote')).toContainText('voice in front');
+  await page.click('#hrtf'); // panning model switch on the spatial graph
+  await page.click('#hrtf');
+  await page.waitForTimeout(500);
+  expect(await page.evaluate(() => state.playing)).toBe(true);
+  await page.reload();
+  await expect(page.locator('#mode')).toHaveValue('spatial');
+  await expect(page.locator('#orbitControls')).toBeHidden();
+  await page.selectOption('#mode', '8d');
+  await expect(page.locator('#orbitControls')).toBeVisible();
+  await expect(page.locator('#export')).toHaveText('Download 8D version');
+  expect(problems).toEqual([]);
+});

@@ -9,6 +9,7 @@
 const $ = (id) => document.getElementById(id);
 
 const params = {
+  mode: '8d',     // '8d': the music travels round; 'spatial': it surrounds you, still (see buildSpatialGraph)
   period: 8,      // seconds per full circle
   strength: 1,    // 0 = original stereo, 1 = fully spatialised
   reverb: 0.3,    // wet amount
@@ -37,7 +38,7 @@ const PRESETS = {
 // through its bridge (SharedPreferences), otherwise in localStorage. Storage
 // can be unavailable (private mode, blocked storage), so every access is guarded.
 const SETTINGS_KEY = '8d-converter.settings';
-const SAVED = ['period', 'strength', 'reverb', 'height', 'bass', 'hrtf', 'vocals', 'vocalFocus', 'format', 'auto', 'motion', 'liveAll', 'liveFollow'];
+const SAVED = ['mode', 'period', 'strength', 'reverb', 'height', 'bass', 'hrtf', 'vocals', 'vocalFocus', 'format', 'auto', 'motion', 'liveAll', 'liveFollow'];
 
 function loadSettings() {
   try {
@@ -128,6 +129,7 @@ function crossfeed(ctx, source, amount) {
 }
 
 function buildGraph(ctx, p) {
+  if (p.mode === 'spatial') return buildSpatialGraph(ctx, p);
   const input = new GainNode(ctx);
 
   const mono = new GainNode(ctx, { channelCount: 1, channelCountMode: 'explicit', channelInterpretation: 'speakers' });
@@ -219,8 +221,151 @@ function buildGraph(ctx, p) {
 
   return {
     input, vocalIn, motionIn, panner, oscillators: [oscX, oscZ, oscY], gainX, gainZ, gainY, motionY, spatial, vocal, original, dry, wet, vocalDry, vocalWet, bass, bleed: crossed.bleed,
+    output: limiter,
     start(when) { this.oscillators.forEach((o) => o.start(when)); },
+    stop() { this.oscillators.forEach((o) => o.stop()); },
   };
+}
+
+// ---------- spatial mode ----------
+
+// Virtual speakers around the listener: [azimuth°, elevation°], 0° = front, + = right.
+// A 7.1.2-style layout. Each is rendered through HRTF, so on headphones the
+// music seems to come from speakers in a room rather than from inside the head.
+const SPEAKERS = {
+  C: [0, 0], FL: [-30, 0], FR: [30, 0], SL: [-100, 0], SR: [100, 0],
+  RL: [-145, 0], RR: [145, 0], TL: [-60, 50], TR: [60, 50],
+};
+const SPATIAL_AMBIENCE = 0.5; // how loud the side speakers' wall reflections are
+const SPATIAL_HEIGHT = 1.5;   // height speakers' level at "Height" 100%
+const SPATIAL_TRIM = 0.6;     // the speakers add up louder than the song; this matches the loudness
+
+/**
+ * Spatial mode, an upmix of the stereo song in the spirit of surround
+ * upmixers, then binaural rendering:
+ * - the voice (vocals mode's centre track) goes to the centre speaker;
+ * - the rest of the left and right channels go to the front speakers at ±30°;
+ * - the side speakers repeat each side a little later, like reflections off
+ *   the walls of a room;
+ * - the room echo comes from the rear speakers, and the treble from the
+ *   height speakers ("Height").
+ * Nothing moves. The bass below 150 Hz bypasses the speakers as plain stereo:
+ * HRTF thins it out and it carries no direction anyway.
+ * Same interface as the 8D graph (input, vocalIn, motionIn, output).
+ */
+function buildSpatialGraph(ctx, p) {
+  const model = p.hrtf ? 'HRTF' : 'equalpower';
+  const input = new GainNode(ctx);
+  const spatial = new GainNode(ctx, { gain: p.strength });
+  const original = new GainNode(ctx, { gain: 1 - p.strength });
+  const master = new GainNode(ctx);
+  const panners = [];
+  const trim = new GainNode(ctx, { gain: SPATIAL_TRIM });
+  const speaker = (name) => {
+    const [az, el] = SPEAKERS[name].map((d) => (d * Math.PI) / 180);
+    const panner = new PannerNode(ctx, {
+      panningModel: model, distanceModel: 'linear', rolloffFactor: 0,
+      // The listener faces -Z.
+      positionX: Math.sin(az) * Math.cos(el), positionY: Math.sin(el), positionZ: -Math.cos(az) * Math.cos(el),
+    });
+    panner.connect(spatial);
+    panners.push(panner);
+    return panner;
+  };
+  const filter = (type, frequency) => new BiquadFilterNode(ctx, { type, frequency, Q: Math.SQRT1_2 });
+  const steep = (node, type, frequency) => node.connect(filter(type, frequency)).connect(filter(type, frequency));
+
+  // The music: the song minus the voice when vocals mode is on (the centre
+  // track is the same in both channels, so it is subtracted from both).
+  const vocalIn = new GainNode(ctx);
+  const music = new GainNode(ctx, { channelCount: 2, channelCountMode: 'explicit' });
+  input.connect(music);
+  vocalIn.connect(new GainNode(ctx, { gain: -1 })).connect(music);
+  const lows = new GainNode(ctx, { gain: p.strength }); // not trimmed: it doesn't pass the speakers
+  steep(music, 'lowpass', BASS_SPLIT).connect(lows).connect(master);
+  const highs = steep(music, 'highpass', BASS_SPLIT);
+  const [left, right] = [0, 1].map(() => new GainNode(ctx, { channelCount: 1, channelCountMode: 'explicit' }));
+  const split = new ChannelSplitterNode(ctx, { numberOfOutputs: 2 });
+  highs.connect(split);
+  split.connect(left, 0);
+  split.connect(right, 1);
+  left.connect(speaker('FL'));
+  right.connect(speaker('FR'));
+
+  // Side speakers: each side's channel again, 15 ms later and softened above
+  // 7 kHz, like a reflection off that side's wall. (Feeding them the
+  // left-minus-right difference, as some upmixers do, sent an inverted copy
+  // of right-hand sounds out of the left side: a sustained piano note mixed
+  // right then sounded centred. The tests caught it.)
+  for (const [channel, name] of [[left, 'SL'], [right, 'SR']]) {
+    channel.connect(filter('lowpass', 7000)).connect(new DelayNode(ctx, { delayTime: 0.015 }))
+      .connect(new GainNode(ctx, { gain: SPATIAL_AMBIENCE })).connect(speaker(name));
+  }
+
+  // Height speakers: the treble above 4 kHz, a little later, from above.
+  const height = new GainNode(ctx, { gain: p.height * SPATIAL_HEIGHT });
+  const air = steep(highs, 'highpass', 4000).connect(new DelayNode(ctx, { delayTime: 0.006 })).connect(height);
+  const airSplit = new ChannelSplitterNode(ctx, { numberOfOutputs: 2 });
+  air.connect(airSplit);
+  airSplit.connect(speaker('TL'), 0);
+  airSplit.connect(speaker('TR'), 1);
+
+  // The voice: centre speaker.
+  const vocal = new GainNode(ctx, { gain: p.strength });
+  vocalIn.connect(vocal).connect(speaker('C'));
+
+  // The room: a short, early-starting echo of everything, from behind.
+  // The voice's echo is mono and goes to both rear speakers equally, so it
+  // can't pull the voice to one side (see the 8D graph's vocal reverb).
+  const room = new GainNode(ctx, { gain: p.reverb * 0.8 });
+  const predelay = new DelayNode(ctx, { delayTime: 0.02 });
+  highs.connect(predelay);
+  const musicRoom = predelay.connect(new ConvolverNode(ctx, { buffer: makeImpulse(ctx, 1.8, 3) }));
+  const roomSplit = new ChannelSplitterNode(ctx, { numberOfOutputs: 2 });
+  musicRoom.connect(room).connect(roomSplit);
+  const [rl, rr] = [speaker('RL'), speaker('RR')];
+  roomSplit.connect(rl, 0);
+  roomSplit.connect(rr, 1);
+  const vocalRoom = new GainNode(ctx, { gain: p.reverb * 0.8 });
+  vocalIn.connect(new DelayNode(ctx, { delayTime: 0.02 }))
+    .connect(new ConvolverNode(ctx, { buffer: makeImpulse(ctx, 1.8, 3, 1) })).connect(vocalRoom);
+  vocalRoom.connect(rl);
+  vocalRoom.connect(rr);
+
+  spatial.connect(trim).connect(master);
+  input.connect(original).connect(master);
+  const bass = new BiquadFilterNode(ctx, { type: 'lowshelf', frequency: 120, gain: p.bass });
+  const limiter = new DynamicsCompressorNode(ctx, { threshold: -1, knee: 0, ratio: 20, attack: 0.003, release: 0.25 });
+  master.connect(bass).connect(limiter).connect(ctx.destination);
+
+  return {
+    input, vocalIn, motionIn: new GainNode(ctx), output: limiter,
+    start() {}, stop() {},
+    apply(q, smooth) {
+      smooth(spatial.gain, q.strength);
+      smooth(lows.gain, q.strength);
+      smooth(vocal.gain, q.strength);
+      smooth(original.gain, 1 - q.strength);
+      smooth(height.gain, q.height * SPATIAL_HEIGHT);
+      smooth(room.gain, q.reverb * 0.8);
+      smooth(vocalRoom.gain, q.reverb * 0.8);
+      smooth(bass.gain, q.bass);
+      for (const panner of panners) panner.panningModel = q.hrtf ? 'HRTF' : 'equalpower';
+    },
+  };
+}
+
+/** Switching between 8D and Spatial builds the other graph, and keeps playing. */
+function rebuildGraph() {
+  const ctx = state.ctx;
+  if (!ctx) return;
+  const old = state.graph;
+  state.graph = buildGraph(ctx, params);
+  state.graph.start(ctx.currentTime);
+  state.orbit = { basePhase: 0, baseTime: ctx.currentTime, freq: 1 / params.period };
+  if (state.playing) startSource(position());
+  old.output.disconnect();
+  old.stop();
 }
 
 function ensureContext() {
@@ -241,6 +386,7 @@ function applyParams() {
   if (!g) return;
   const t = state.ctx.currentTime;
   const smooth = (param, v) => param.setTargetAtTime(v, t, 0.05);
+  if (g.apply) { g.apply(params, smooth); return; }
 
   const freq = 1 / params.period;
   const o = state.orbit;
@@ -376,12 +522,12 @@ async function loadFile(file) {
 // ---------- follow the music (auto.js) ----------
 
 function autoActive() {
-  return params.auto && !!state.motionBuffer;
+  return params.mode !== 'spatial' && params.auto && !!state.motionBuffer;
 }
 
 /** Analyse the current song's beat and loudness (once), then plan the orbit. */
 async function prepareAuto() {
-  if (!params.auto || !state.buffer) { renderAutoNote(); return; }
+  if (!params.auto || params.mode === 'spatial' || !state.buffer) { renderAutoNote(); return; }
   const buffer = state.buffer;
   if (!state.analysis) {
     state.analysing = true;
@@ -542,7 +688,7 @@ async function exportFile() {
   const btn = $('export');
   exporting = true;
   btn.disabled = true;
-  setStatus('Rendering 8D version… (this can take a little while for long songs)');
+  setStatus(`Rendering ${modeName()} version… (this can take a little while for long songs)`);
   try {
     // Render straight at a rate MP3 supports; the source node resamples for us.
     const rate = format === 'mp3' && !MP3_RATES.includes(b.sampleRate) ? 44100 : b.sampleRate;
@@ -568,7 +714,7 @@ async function exportFile() {
     const blob = format === 'mp3'
       ? await encodeMp3(rendered, Number(kbps), (f) => setStatus(`Encoding MP3… ${Math.round(f * 100)}%`))
       : encodeWav(rendered);
-    const saved = await download(blob, `${state.fileName} (8D).${format}`);
+    const saved = await download(blob, `${state.fileName} (${modeName()}).${format}`);
     setStatus(saved ? `Done — ${(blob.size / 1048576).toFixed(1)} MB ${format.toUpperCase()} saved.` : 'Save cancelled.');
   } catch (err) {
     console.error(err);
@@ -704,6 +850,7 @@ function toBase64(bytes) {
 
 // ---------- UI ----------
 
+const modeName = () => (params.mode === 'spatial' ? 'Spatial' : '8D');
 const fmt = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 const setStatus = (msg) => { $('status').textContent = msg; };
 
@@ -746,6 +893,18 @@ function drawOrbit() {
     g.fillText('voice', c, c + 40);
   }
 
+  if (params.mode === 'spatial') {
+    // Still: the virtual speakers around the head; height speakers drawn hollow.
+    for (const [name, [az, el]] of Object.entries(SPEAKERS)) {
+      if (name === 'C' && !(params.vocals && state.vocalBuffer)) continue;
+      if (el && !params.height) continue;
+      const a = (az * Math.PI) / 180, d = r * (el ? 0.55 : 1) * (0.4 + 0.6 * params.strength);
+      g.fillStyle = dot; g.strokeStyle = dot; g.lineWidth = 2;
+      g.beginPath(); g.arc(c + Math.sin(a) * d, c - Math.cos(a) * d, 7, 0, Math.PI * 2);
+      if (el) g.stroke(); else g.fill();
+    }
+    return;
+  }
   const a = orbitAngle();
   const x = c + Math.sin(a) * r * params.strength;
   const y = c - Math.cos(a) * r * params.strength;
@@ -762,6 +921,14 @@ function render() {
     if (!seeking) $('seek').value = String(Math.round((pos / state.buffer.duration) * 1000));
   }
   $('export').disabled = !state.buffer || state.separating || state.analysing || exporting;
+  const spatialMode = params.mode === 'spatial';
+  $('orbitControls').hidden = spatialMode;
+  $('heightName').textContent = spatialMode ? 'Height (sound from above)' : 'Height wobble';
+  $('modeNote').textContent = spatialMode
+    ? 'Like sitting among speakers: voice in front, music around and above you. A still, room-like sound made from the stereo song. Use headphones.'
+    : '';
+  $('export').textContent = `Download ${modeName()} version`;
+  $('orbit').setAttribute('aria-label', spatialMode ? 'Where the virtual speakers are, seen from above' : 'Sound position, seen from above');
   $('periodOut').textContent = autoActive() ? `target ${params.period}s` : `${params.period}s per circle`;
   $('motion').disabled = !params.auto;
   $('strengthOut').textContent = `${Math.round(params.strength * 100)}%`;
@@ -794,6 +961,7 @@ function syncControls() {
   $('vocals').checked = params.vocals;
   $('auto').checked = params.auto;
   $('motion').value = params.motion;
+  $('mode').value = params.mode;
   $('format').value = params.format;
 }
 
@@ -834,6 +1002,14 @@ function bind() {
   };
   slider('period', 'period', 1);
   $('period').addEventListener('change', () => { if (autoActive()) planOrbit(); });
+  $('mode').addEventListener('change', async (e) => {
+    params.mode = e.target.value;
+    saveSettings();
+    rebuildGraph();
+    render();
+    if (params.mode !== 'spatial') await prepareAuto(); // plan the orbit if that was skipped
+    else renderAutoNote();
+  });
   $('motion').addEventListener('change', (e) => {
     params.motion = e.target.value;
     saveSettings();

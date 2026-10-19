@@ -16,12 +16,13 @@ Open `index.html` in a browser, or host the folder on any static host. For GitHu
 
 | Control | What it does |
 | --- | --- |
+| Effect | 8D (the music travels around your head) or Spatial (it surrounds you, still; see below) |
 | Orbit time | Seconds per full circle around your head (2–20 s); with Follow the music, the target that gets fitted to the beat |
 | Follow the music | On by default: the movement is synced to the song's beat (see below) |
 | Movement | With Follow the music: **Here & there with the beat** (default): the music jumps to a new spot around you on every beat; **Left–right with the beat**: it bounces side to side; **Smooth circle**: one circle takes a whole number of beats and turns twice as fast in loud parts, half as fast in quiet ones. The beat styles move every 2 beats in quiet parts or above 140 BPM. Without a steady beat, the music circles instead |
 | Effect strength | Blends between the original stereo mix (0%) and fully rotating sound (100%) |
 | Reverb | Adds room sound, which helps the "out of your head" feel |
-| Height wobble | Moves the sound slightly up and down while it circles |
+| Height wobble | Moves the sound slightly up and down while it circles. In Spatial mode: how much treble comes from above |
 | Bass boost | Low-shelf boost at 120 Hz, up to +12 dB; a limiter keeps playback from clipping |
 | Keep vocals in the center | On by default: the voice stays in the middle of your head and only the music orbits (see below) |
 | Vocal strictness | How alike both ears must be to count as voice. Stricter stops instruments sticking to the middle; looser catches slightly off-centre vocals |
@@ -116,6 +117,18 @@ WebView debugging, which the Android test relies on, is only switched on in debu
 ## How it works
 
 **Vocals mode** (`vocals.js`): lead vocals are almost always mixed dead-centre, identical in both channels. The song is analysed in short overlapping slices (2048-point FFT, 75% overlap). In each slice and frequency bin, left and right are compared for level and phase. Bins that match, inside the vocal range (about 150 Hz to 9 kHz, with soft edges), form a mono "centre" track. During playback and export that track plays in sync with the song. It goes straight to the middle with its own mono reverb, so sung notes don't drift, and it is subtracted from what orbits, so nothing is doubled or lost. Bass below the vocal range and cymbals above it keep orbiting. Separation takes about 1.6 s per minute of audio on a desktop; phones are slower.
+
+**Spatial mode** (`buildSpatialGraph` in `app.js`) is the alternative to 8D: nothing moves, and the song surrounds you as if you were sitting among speakers. It is an upmix of the stereo song, then binaural (HRTF) rendering of 9 virtual speakers, a 7.1.2-style layout:
+- **Centre (0°):** the voice, when "Keep vocals in the center" is on (the vocals-mode centre track).
+- **Front (±30°):** the rest of the left and right channels. A sound mixed hard left comes from a speaker front-left instead of from inside your left ear: measured on pink noise, it is 8 dB louder in the left ear, not only in the left ear.
+- **Sides (±100°):** each side again, 15 ms later and softened above 7 kHz, like a reflection off that side's wall. An earlier version fed them the left-minus-right difference, as some upmixers do, but that sent an inverted copy of right-hand sounds out of the left side. A sustained piano note mixed right then sounded centred. The tests caught it.
+- **Rear (±145°):** the room echo (Reverb), starting 20 ms late. The voice's echo is mono and equal in both rear speakers, so it can't pull the voice sideways.
+- **Height (±60°, 50° up):** the treble above 4 kHz, from above (the Height slider; it adds about 5 dB above 5 kHz at 100%).
+- **Bass** below 150 Hz bypasses the speakers as plain stereo.
+
+The speakers' total is trimmed to the song's loudness (within about 1 dB on pink noise). Effect strength blends with the original stereo.
+
+What it is not: Apple's Spatial Audio plays songs mixed in Dolby Atmos, where each instrument is a separate object with its own position, and with AirPods it tracks your head. This mode starts from an ordinary stereo file, so it can only spread what the stereo mix contains, and it has no head tracking. Whether it sounds "out of your head" varies from person to person, because HRTF is a generic head; that can't be measured by the tests. It is file conversion only: Live 8D stays 8D.
 
 **Follow the music** (`auto.js`) works like this:
 - **Onsets.** The song is analysed in 1024-point frames. Onsets are the rise in loudness across 12 log-spaced bands, from 30 Hz to 10 kHz. Bands rather than FFT bins keep random noise from swamping the drums.

@@ -58,6 +58,15 @@
     </section>
 
     <section id="controls" class="card">
+      <div class="ctl">
+        <label for="mode">Effect</label>
+        <select id="mode">
+          <option value="8d">8D: the music travels around your head</option>
+          <option value="spatial">Spatial: the music surrounds you, like a room (no movement)</option>
+        </select>
+      </div>
+      <p id="modeNote" class="hint flush-left"></p>
+      <div id="orbitControls">
       <div id="presets" class="presets" role="group" aria-label="Presets"></div>
       <div class="ctl">
         <label for="period">Orbit time <output id="periodOut"></output></label>
@@ -73,6 +82,7 @@
         </select>
       </div>
       <p id="autoNote" class="hint"></p>
+      </div>
       <div class="ctl">
         <label for="strength">Effect strength <output id="strengthOut"></output></label>
         <input id="strength" type="range" min="0" max="100" value="100">
@@ -82,7 +92,7 @@
         <input id="reverb" type="range" min="0" max="100" value="30">
       </div>
       <div class="ctl">
-        <label for="height">Height wobble <output id="heightOut"></output></label>
+        <label for="height"><span id="heightName">Height wobble</span> <output id="heightOut"></output></label>
         <input id="height" type="range" min="0" max="100" value="0">
       </div>
       <div class="ctl">

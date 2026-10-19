@@ -177,6 +177,27 @@ async function main() {
     await page.click('#play');
   });
 
+  await step('spatial mode plays in the app and renders a still, centred mix', async () => {
+    await page.selectOption('#mode', 'spatial');
+    await page.click('#play');
+    await page.waitForFunction(() => state.playing && document.getElementById('cur').textContent >= '0:01', null, { timeout: 15_000 });
+    await device.screenshot({ path: `${OUT}/spatial.png` });
+    await page.click('#play');
+    // Render a short stretch offline with the app's own graph: the WebView's HRTF must produce sound in both ears.
+    const ears = await page.evaluate(async () => {
+      const off = new OfflineAudioContext({ numberOfChannels: 2, length: 44100 * 2, sampleRate: 44100 });
+      const g = buildGraph(off, params);
+      const src = new AudioBufferSourceNode(off, { buffer: state.buffer });
+      src.connect(g.input);
+      src.start(0);
+      const out = await off.startRendering();
+      return [0, 1].map((c) => Math.sqrt(out.getChannelData(c).reduce((s, x) => s + x * x, 0) / out.length));
+    });
+    console.log(`  spatial render RMS left ${ears[0].toFixed(3)}, right ${ears[1].toFixed(3)}`);
+    assert.ok(ears[0] > 0.01 && ears[1] > 0.01, 'spatial mode rendered silence');
+    await page.selectOption('#mode', '8d');
+  });
+
   await step('MP3 export saves through the "Save as" screen; voice centred, music moves', async () => {
     await device.shell('rm -f "/sdcard/Download/song (8D).mp3"');
     await page.selectOption('#format', 'mp3-128');
