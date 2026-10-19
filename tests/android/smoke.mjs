@@ -276,19 +276,22 @@ async function main() {
     console.log(`  effect chain (audio_flinger):\n${await effectChain()}`);
     const engine = (await device.shell('logcat -d -s 8DLIVE:*')).toString().trim().split('\n').slice(-6).join('\n');
     console.log(`  engine log:\n${engine}`);
-    const where = mix.length ? 'mix_' : '';
-    const on = mix.length ? mix : own;
+    // The final mix is what is heard; its meter is auto-scaled, so judge the
+    // left-minus-right difference (in dB), which is what 8D changes.
+    const where = 'mix_';
+    const on = mix;
+    const diff = (xs) => xs.map((x) => x.l - x.r);
     const perSecond = [];
     for (let s = 0; s < 16; s++) {
       const w = on.filter((x) => x.t >= on[0].t + s && x.t < on[0].t + s + 1);
       if (w.length) perSecond.push(`${(w.reduce((a, x) => a + x.l, 0) / w.length).toFixed(0)}/${(w.reduce((a, x) => a + x.r, 0) / w.length).toFixed(0)}`);
     }
-    const onSwing = [swing(on.map((x) => x.l)), swing(on.map((x) => x.r))];
+    const onSwing = swing(diff(on));
     const corr = correlation(on.map((x) => x.l), on.map((x) => x.r));
     console.log(`  live on: ${on.length} readings; left/right dB per second: ${perSecond.join(' ')}`);
-    console.log(`  live on: swing left ${onSwing[0].toFixed(1)} dB, right ${onSwing[1].toFixed(1)} dB, correlation ${corr.toFixed(2)}`);
-    assert.ok(on.length >= 40, 'too few level readings from the player');
-    assert.ok(onSwing[0] > 8 && onSwing[1] > 8, 'the sound did not move between the ears');
+    console.log(`  live on: left-minus-right swings ${onSwing.toFixed(1)} dB; left/right correlation ${corr.toFixed(2)}`);
+    assert.ok(on.length >= 40, 'too few level readings from the final mix');
+    assert.ok(onSwing > 16, 'the sound did not move between the ears');
     assert.ok(corr < -0.3, 'left and right did not move in opposite directions');
 
     await page.evaluate(() => Android8D.liveStop());
@@ -296,9 +299,10 @@ async function main() {
     await device.shell('logcat -c');
     await sleep(6000);
     const off = await playerLevels(where);
-    const offSwing = [swing(off.map((x) => x.l)), swing(off.map((x) => x.r))];
-    console.log(`  live off: swing left ${offSwing[0].toFixed(1)} dB, right ${offSwing[1].toFixed(1)} dB`);
-    assert.ok(offSwing[0] < 3 && offSwing[1] < 3, 'the sound kept moving after live 8D was stopped');
+    const offSwing = swing(diff(off));
+    console.log(`  live off: left-minus-right swings ${offSwing.toFixed(1)} dB`);
+    assert.ok(off.length >= 10, 'too few level readings after stopping');
+    assert.ok(offSwing < 4, 'the sound kept moving after live 8D was stopped');
     assert.equal(JSON.parse(await page.evaluate(() => Android8D.liveStatus())).running, false);
   });
 }

@@ -54,14 +54,17 @@ public class PlayerActivity extends Activity {
     }
 
     /**
-     * Measures our own output with two visualizers: one on this session (its
-     * place in the effect chain relative to Live 8D's effect is what we want
-     * to learn) and one on the device's final output mix (session 0), which is
-     * what is actually heard. Each sees a mono mix, but the left tone is 440 Hz
-     * and the right one 660 Hz, so their FFT bins tell the ears apart.
+     * Measures our own output with two visualizers. The one on this session
+     * sits before Live 8D's effect in the chain (the emulator showed it is
+     * registered first), so it reports the unprocessed sound. The one on the
+     * device's final output mix (session 0) hears what is actually played.
+     * Each sees a mono mix, but the left tone is 440 Hz and the right one
+     * 660 Hz, so their FFT bins tell the ears apart. The final mix is very
+     * quiet on the emulator, so it is auto-scaled (NORMALIZED): absolute
+     * levels are lost, but the left/right difference, which 8D changes, stays.
      */
     private void measure(int session) {
-        Visualizer own = open(session), mix = open(0);
+        Visualizer own = open(session, Visualizer.SCALING_MODE_AS_PLAYED), mix = open(0, Visualizer.SCALING_MODE_NORMALIZED);
         if (own == null && mix == null) return;
         byte[] fft = new byte[Visualizer.getCaptureSizeRange()[1]];
         long t0 = System.nanoTime();
@@ -83,11 +86,11 @@ public class PlayerActivity extends Activity {
         }
     }
 
-    private static Visualizer open(int session) {
+    private static Visualizer open(int session, int scaling) {
         try {
             Visualizer v = new Visualizer(session);
             v.setCaptureSize(Visualizer.getCaptureSizeRange()[1]);
-            v.setScalingMode(Visualizer.SCALING_MODE_AS_PLAYED);
+            v.setScalingMode(scaling);
             v.setEnabled(true);
             return v;
         } catch (RuntimeException e) {
