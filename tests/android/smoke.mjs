@@ -41,11 +41,13 @@ async function waitUntil(check, what, timeout = 30_000) {
  * for the file picker). A person would press Wait; so does the test.
  */
 async function dismissNotResponding() {
-  if (!/Application Not Responding/.test(await focusedWindow())) return;
-  const wait = (await screenNodes()).find((n) => /^wait$/i.test(n.text) && n.box);
-  console.log(`  (system "not responding" dialog; pressing ${wait ? 'Wait' : 'Back'})`);
-  if (wait) await sh(`input tap ${(wait.box.x1 + wait.box.x2) >> 1} ${(wait.box.y1 + wait.box.y2) >> 1}`);
-  else await pressBack();
+  for (let i = 0; i < 5 && /Application Not Responding/.test(await focusedWindow()); i++) {
+    const wait = (await screenNodes()).find((n) => /^wait$/i.test(n.text) && n.box);
+    console.log(`  (system "not responding" dialog; pressing ${wait ? 'Wait' : 'Back'})`);
+    if (wait) await sh(`input tap ${(wait.box.x1 + wait.box.x2) >> 1} ${(wait.box.y1 + wait.box.y2) >> 1}`);
+    else await pressBack();
+    await sleep(1000);
+  }
 }
 
 /** All on-screen nodes as attribute maps, plus parsed bounds. */
@@ -68,6 +70,7 @@ async function tapNode(match, what) {
 async function step(name, fn) {
   const t0 = Date.now();
   try {
+    await dismissNotResponding(); // a busy emulator can leave a system ANR dialog on top
     await fn();
     results.push(`PASS  ${name} (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
     console.log(results.at(-1));
@@ -139,8 +142,8 @@ async function main() {
   await step('content stays clear of the status and navigation bars', async () => {
     const size = (await device.shell('wm size')).toString().match(/(\d+)x(\d+)\s*$/m);
     const screenH = Number(size[2]);
-    const webview = (await screenNodes()).find((n) => n.class === 'android.webkit.WebView');
-    assert.ok(webview, 'WebView not found on screen');
+    let webview;
+    await waitUntil(async () => (webview = (await screenNodes()).find((n) => n.class === 'android.webkit.WebView')), 'the app on screen');
     console.log(`  screen height ${screenH}px, WebView bounds ${webview.bounds}`);
     assert.ok(webview.box.y1 > 0, 'WebView starts under the status bar');
     assert.ok(webview.box.y2 < screenH, 'WebView extends under the navigation bar');
