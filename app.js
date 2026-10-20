@@ -1202,6 +1202,10 @@ function bind() {
   loadSettings();
   syncControls();
   bindLive();
+  // Website only: works offline and can be installed (sw.js). The Android app bundles its files.
+  if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol) && !window.Android8D) {
+    navigator.serviceWorker.register('sw.js').catch(() => { /* offline support is optional */ });
+  }
 
   const tick = () => { if (state.playing) render(); requestAnimationFrame(tick); };
   requestAnimationFrame(tick);

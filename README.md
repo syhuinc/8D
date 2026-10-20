@@ -14,6 +14,12 @@ Open `index.html` in a browser, or host the folder on any static host. For GitHu
 
 **Compare with original** (under the player) switches between the effect and the untouched song at the same spot, so you can judge the difference. Both effects are level-matched to the song, measured on a stereo pink-noise mix: 8D and Spatial within about 1 dB. Before this, 8D came out about 3 dB quieter than the song, and a quieter version sounds worse side by side even when it isn't. Very wide stereo still comes out about 2 dB quieter in 8D, because 8D sums the song to mono before moving it.
 
+**Song tags:** the download keeps the song's title, artist, album and cover art, with "(8D)" or "(Spatial)" added to the title, so it shows up properly in music players. They are read from ID3v2.2/2.3/2.4 tags (MP3) and iTunes-style MP4 tags (M4A) by `tags.js`, and written as ID3v2.3 (MP3) or a RIFF INFO chunk (WAV; title, artist and album, since WAV has no common cover-art field). Songs without tags get their file name as the title. FLAC and Ogg tags aren't read yet.
+
+**Install and offline (website):** the site has a web app manifest and a service worker (`sw.js`), so it can be installed from the browser menu ("Add to Home Screen" on iPhone, "Install app" on Android and desktop) and works with no connection after one visit. The service worker fetches from the network first, so an online visit always gets the latest version, and stores every file the app needs, the MP3 encoder included. The Android app doesn't use it: it bundles its files.
+
+**Progress** (separating, analysing, encoding) and messages appear in a bar at the bottom of the screen, wherever the page is scrolled. Height, bass boost, vocal strictness and 3D headphone mode are under **Fine-tune**.
+
 **Presets** (Classic 8D, Slow & dreamy, Fast spin, Concert hall, Bass 8D) set the sliders in one tap; the active one is highlighted. All settings are remembered on the device.
 
 | Control | What it does |

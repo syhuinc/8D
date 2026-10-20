@@ -876,3 +876,29 @@ test('song tags: reads ID3v2.2, unsynchronised ID3v2.3 with UTF-16, and iTunes M
   const { bytes } = await exportAndDownload(page, 'wav');
   expect(bytes.subarray(bytes.indexOf(Buffer.from('LIST'))).toString()).toContain('Morning Walk (8D)');
 });
+
+test('website works offline after one visit: reload, load a song and export an MP3 with no network', async ({ page, context }) => {
+  await page.goto('');
+  await page.evaluate(() => navigator.serviceWorker.ready);
+  const manifest = await (await page.request.get('manifest.webmanifest')).json();
+  expect(manifest.display).toBe('standalone');
+  for (const icon of manifest.icons) expect((await page.request.get(icon.src)).ok(), icon.src).toBe(true);
+
+  // What is stored for offline use: every script and style the page loads, the lazily loaded
+  // MP3 encoder and the icons. (Checked directly: the offline switch below doesn't reach the
+  // service worker's own requests, so it can't prove these on its own.)
+  const stored = await page.evaluate(async () => (await (await caches.open('8d-converter')).keys()).map((r) => new URL(r.url).pathname));
+  const needed = await page.evaluate(() => [
+    ...[...document.querySelectorAll('script[src], link[rel=stylesheet], link[rel=manifest]')].map((e) => new URL(e.src || e.href).pathname),
+    new URL('vendor/lamejs/lame.min.js', location.href).pathname,
+  ]);
+  for (const path of [...needed, ...manifest.icons.map((i) => `/8D/${i.src}`)]) expect(stored, path).toContain(path);
+
+  await context.setOffline(true);
+  await page.reload();
+  await expect(page.locator('#drop')).toBeVisible();
+  await loadSong(page, song());
+  const { name } = await exportAndDownload(page, 'mp3-128'); // the encoder is fetched lazily: it must be stored too
+  expect(name).toBe('song (8D).mp3');
+  await context.setOffline(false);
+});
