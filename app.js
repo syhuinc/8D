@@ -80,6 +80,7 @@ const state = {
   motionBuffer: null, // the planned sound position, played in sync with the song
   motionSource: null,
   analysing: false,
+  tags: {},           // the song's title, artist, album and cover (tags.js), carried into the download
   comparing: false,   // "Compare with original" is held on
 };
 
@@ -553,6 +554,7 @@ async function loadFile(file) {
   try {
     const ctx = ensureContext();
     const bytes = await file.arrayBuffer();
+    const tags = Tags.read(bytes); // before decoding, which takes over the bytes
     const buffer = await ctx.decodeAudioData(bytes);
     if (state.playing) pause();
     stopSource();
@@ -563,6 +565,7 @@ async function loadFile(file) {
     state.motionAngles = null;
     state.motionBuffer = null;
     state.fileName = file.name.replace(/\.[^.]+$/, '') || 'song';
+    state.tags = tags;
     state.offset = 0;
     $('dropTitle').textContent = file.name;
     $('dropHint').textContent = 'Tap to choose a different song';
@@ -813,8 +816,8 @@ async function exportFile() {
     const rendered = await off.startRendering();
     normalise(rendered, 0.98);
     const blob = format === 'mp3'
-      ? await encodeMp3(rendered, Number(kbps), (f) => setStatus(`Encoding MP3… ${Math.round(f * 100)}%`, f))
-      : encodeWav(rendered);
+      ? await encodeMp3(rendered, Number(kbps), (f) => setStatus(`Encoding MP3… ${Math.round(f * 100)}%`, f), outputTags())
+      : encodeWav(rendered, outputTags());
     const saved = await download(blob, `${state.fileName} (${modeName()}).${format}`);
     setStatus(saved ? `Done — ${(blob.size / 1048576).toFixed(1)} MB ${format.toUpperCase()} saved.` : 'Save cancelled.');
   } catch (err) {
@@ -840,13 +843,19 @@ function normalise(buffer, ceiling) {
   }
 }
 
-function encodeWav(buffer) {
+/** The song's tags for the download, its title marked "(8D)" or "(Spatial)". */
+function outputTags() {
+  return { ...state.tags, title: `${state.tags.title || state.fileName} (${modeName()})` };
+}
+
+function encodeWav(buffer, tags = {}) {
+  const info = Tags.wavInfo(tags); // appended after the audio, which every reader allows
   const channels = buffer.numberOfChannels;
   const frames = buffer.length;
   const dataSize = frames * channels * 2;
   const out = new DataView(new ArrayBuffer(44 + dataSize));
   const str = (o, s) => { for (let i = 0; i < s.length; i++) out.setUint8(o + i, s.charCodeAt(i)); };
-  str(0, 'RIFF'); out.setUint32(4, 36 + dataSize, true); str(8, 'WAVE');
+  str(0, 'RIFF'); out.setUint32(4, 36 + dataSize + info.length, true); str(8, 'WAVE');
   str(12, 'fmt '); out.setUint32(16, 16, true); out.setUint16(20, 1, true);
   out.setUint16(22, channels, true); out.setUint32(24, buffer.sampleRate, true);
   out.setUint32(28, buffer.sampleRate * channels * 2, true); out.setUint16(32, channels * 2, true);
@@ -861,7 +870,7 @@ function encodeWav(buffer) {
       o += 2;
     }
   }
-  return new Blob([out.buffer], { type: 'audio/wav' });
+  return new Blob([out.buffer, info], { type: 'audio/wav' });
 }
 
 function toInt16(x) {
@@ -883,7 +892,7 @@ function loadLame() {
   return lameLoading;
 }
 
-async function encodeMp3(buffer, kbps, onProgress) {
+async function encodeMp3(buffer, kbps, onProgress, tags = {}) {
   await loadLame();
   const enc = new lamejs.Mp3Encoder(2, buffer.sampleRate, kbps);
   const left = buffer.getChannelData(0);
@@ -909,7 +918,7 @@ async function encodeMp3(buffer, kbps, onProgress) {
     }
   }
   parts.push(enc.flush());
-  return new Blob(parts, { type: 'audio/mpeg' });
+  return new Blob([Tags.id3(tags), ...parts], { type: 'audio/mpeg' });
 }
 
 async function download(blob, name) {

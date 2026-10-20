@@ -7,7 +7,7 @@ plugins {
 def webAssetsDir = layout.buildDirectory.dir('generated/web-assets').get().asFile
 def copyWebAssets = tasks.register('copyWebAssets', Copy) {
     from(rootProject.projectDir.parentFile) {
-        include 'index.html', 'app.js', 'vocals.js', 'auto.js', 'style.css', 'icons/**', 'vendor/**'
+        include 'index.html', 'app.js', 'vocals.js', 'auto.js', 'tags.js', 'style.css', 'icons/**', 'vendor/**'
     }
     into new File(webAssetsDir, 'www')
 }

@@ -783,3 +783,96 @@ test('fine-tune: the less used settings start folded away, and work once opened'
   await setSlider(page, 'bass', 6);
   await expect(page.locator('#bassOut')).toHaveText('+6 dB');
 });
+
+// Song tags (tags.js)
+
+/** A hand-built ID3v2.4 tag (UTF-8 text, syncsafe frame sizes), independent of tags.js. */
+function id3v24({ title, artist, album, cover }) {
+  const syncsafe = (n) => [(n >> 21) & 0x7f, (n >> 14) & 0x7f, (n >> 7) & 0x7f, n & 0x7f];
+  const frame = (id, body) => Buffer.concat([Buffer.from(id), Buffer.from(syncsafe(body.length)), Buffer.from([0, 0]), body]);
+  const textFrame = (id, s) => frame(id, Buffer.concat([Buffer.from([3]), Buffer.from(s, 'utf8')]));
+  const frames = Buffer.concat([
+    textFrame('TIT2', title), textFrame('TPE1', artist), textFrame('TALB', album), textFrame('TCON', 'Pop'),
+    frame('APIC', Buffer.concat([Buffer.from([3]), Buffer.from('image/png\0'), Buffer.from([3]), Buffer.from('cover\0'), cover])),
+  ]);
+  return Buffer.concat([Buffer.from('ID3'), Buffer.from([4, 0, 0]), Buffer.from(syncsafe(frames.length)), frames]);
+}
+
+test('song tags: title, artist, album and cover carry over into the MP3 and WAV downloads', async ({ page }) => {
+  await page.goto('');
+  // A real MP3 to start from: the app's own export, with its tag swapped for a v2.4 one.
+  await loadSong(page, song());
+  const { bytes: plain } = await exportAndDownload(page, 'mp3-128');
+  const ownTagSize = 10 + ((plain[6] << 21) | (plain[7] << 14) | (plain[8] << 7) | plain[9]);
+  const cover = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 0xff, 0x00, 4, 5]);
+  const tagged = Buffer.concat([id3v24({ title: 'Café ☕ Song', artist: 'The Band', album: 'First Album', cover }), plain.subarray(ownTagSize)]);
+  await loadSong(page, { name: 'track01.mp3', mimeType: 'audio/mpeg', buffer: tagged });
+
+  const read = (bytes) => page.evaluate((b64) => {
+    const t = Tags.read(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)).buffer);
+    return { ...t, cover: t.cover && { mime: t.cover.mime, data: [...t.cover.data] } };
+  }, Buffer.from(bytes).toString('base64'));
+
+  const { name, bytes: mp3 } = await exportAndDownload(page, 'mp3-128');
+  expect(name).toBe('track01 (8D).mp3');
+  const out = await read(mp3);
+  expect(out.title).toBe('Café ☕ Song (8D)');
+  expect(out.artist).toBe('The Band');
+  expect(out.album).toBe('First Album');
+  expect(out.cover).toEqual({ mime: 'image/png', data: [...cover] });
+  const decoded = await analyseInPage(page, mp3); // still a playable MP3
+  expect(decoded.channels).toBe(2);
+
+  await page.selectOption('#mode', 'spatial');
+  const { bytes: wav } = await exportAndDownload(page, 'wav');
+  const info = wav.subarray(wav.indexOf(Buffer.from('LIST')));
+  expect(info.subarray(8, 12).toString()).toBe('INFO');
+  expect(info.toString('utf8')).toContain('Café ☕ Song (Spatial)');
+  expect(info.toString('utf8')).toContain('The Band');
+  expect(wav.readUInt32LE(4)).toBe(wav.length - 8); // RIFF size covers the INFO chunk
+  expect((await analyseInPage(page, wav)).channels).toBe(2);
+});
+
+test('song tags: reads ID3v2.2, unsynchronised ID3v2.3 with UTF-16, and iTunes MP4 tags; untagged files fall back to the file name', async ({ page }) => {
+  await page.goto('');
+  const r = await page.evaluate(() => {
+    const bytes = (...parts) => {
+      const flat = parts.flatMap((p) => (typeof p === 'string' ? [...p].map((c) => c.charCodeAt(0)) : [...p]));
+      return new Uint8Array(flat);
+    };
+    const be32 = (n) => [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];
+    const ss = (n) => [(n >> 21) & 127, (n >> 14) & 127, (n >> 7) & 127, n & 127];
+    // ID3v2.2: 3-letter frames, 3-byte sizes.
+    const tt2 = bytes([0], 'Old Title');
+    const v22body = bytes('TT2', [0, 0, tt2.length], tt2, 'TP1', [0, 0, 7], [0], 'Artist');
+    const v22 = bytes('ID3', [2, 0, 0], ss(v22body.length), v22body);
+    // ID3v2.3, UTF-16 title with BOM; whole tag unsynchronised (flag 0x80): a 0xFF in the title gets a 0x00 after it.
+    const title16 = bytes([1, 0xff, 0xfe], [0xe9, 0, 0x74, 0, 0xe9, 0, 0xff, 0]); // "été" + U+00FF
+    const raw23 = bytes('TIT2', be32(title16.length), [0, 0], title16);
+    const sync23 = []; for (const b of raw23) { sync23.push(b); if (b === 0xff) sync23.push(0); }
+    const v23 = bytes('ID3', [3, 0, 0x80], ss(sync23.length), sync23);
+    // MP4: ftyp, then moov > udta > meta (version/flags) > ilst > ©nam > data.
+    const box = (type, ...content) => { const body = bytes(...content); return bytes(be32(8 + body.length), type, body); };
+    const dataBox = (kind, payload) => box('data', [0, 0, 0, kind], [0, 0, 0, 0], payload);
+    const mp4 = bytes(box('ftyp', 'M4A ', [0, 0, 0, 0]), box('moov', box('udta', box('meta', [0, 0, 0, 0],
+      box('ilst', box('©nam', dataBox(1, new TextEncoder().encode('Ünïcode'))), box('©ART', dataBox(1, 'Singer')),
+        box('covr', dataBox(13, [0xff, 0xd8, 0xff])))))));
+    const t4 = Tags.read(mp4.buffer);
+    return {
+      v22: Tags.read(v22.buffer), v23: Tags.read(v23.buffer),
+      mp4: { title: t4.title, artist: t4.artist, cover: t4.cover && [t4.cover.mime, [...t4.cover.data]] },
+      none: Tags.read(new Uint8Array([82, 73, 70, 70, 0, 0, 0, 0]).buffer),
+      broken: Tags.read(bytes('ID3', [3, 0, 0], [0, 0, 0, 50], 'TIT2', [0, 0, 0, 200], [0, 0], [0, 65]).buffer),
+    };
+  });
+  expect(r.v22).toEqual({ title: 'Old Title', artist: 'Artist' });
+  expect(r.v23).toEqual({ title: 'étéÿ' });
+  expect(r.mp4).toEqual({ title: 'Ünïcode', artist: 'Singer', cover: ['image/jpeg', [0xff, 0xd8, 0xff]] });
+  expect(r.none).toEqual({});
+  expect(r.broken.title).toBe('A'); // truncated frame: what's there, no crash
+
+  // An untagged WAV: the download's title is the file name.
+  await loadSong(page, song('Morning Walk.wav'));
+  const { bytes } = await exportAndDownload(page, 'wav');
+  expect(bytes.subarray(bytes.indexOf(Buffer.from('LIST'))).toString()).toContain('Morning Walk (8D)');
+});
