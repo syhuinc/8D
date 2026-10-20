@@ -99,6 +99,22 @@ button:disabled { opacity: 0.5; cursor: progress; }
 .wide { width: 100%; padding: 14px; }
 .status { min-height: 1.5em; margin: 10px 0 0; font-size: 14px; color: var(--muted); }
 
+.fine-tune { margin: 6px 0 18px; padding: 10px 0 0; border-top: 1px solid var(--line); }
+.fine-tune summary { margin-bottom: 12px; font-size: 14px; color: var(--text); }
+.toast {
+  position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%);
+  width: calc(100% - 32px); max-width: 528px; padding: 10px 14px;
+  background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18); z-index: 10;
+}
+.toast .status { margin: 0; min-height: 0; color: var(--text); }
+.progress { margin-top: 8px; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
+#progressBar { height: 100%; width: 0; background: var(--accent); transition: width 0.15s; }
+.progress.busy #progressBar { width: 30%; animation: busy 1.2s ease-in-out infinite; }
+@keyframes busy { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
+@media (prefers-reduced-motion: reduce) { .progress.busy #progressBar { animation: none; width: 100%; opacity: 0.4; } }
+.wrap { padding-bottom: 96px; } /* room to scroll the last controls above the toast */
+
 select {
   width: 100%; margin-top: 4px; padding: 10px; font: inherit; font-size: 14px;
   color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 10px;

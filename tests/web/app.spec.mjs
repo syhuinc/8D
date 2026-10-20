@@ -186,7 +186,13 @@ test('vocals mode explains that mono songs cannot be separated', async ({ page }
 });
 
 const mixFile = () => ({ name: 'mix.wav', mimeType: 'audio/wav', buffer: makeMix() });
+// Height, bass, vocal strictness and HRTF live in the collapsed "Fine-tune" section.
+async function openFineTune(page) {
+  if (!(await page.evaluate(() => document.getElementById('fineTune').open))) await page.click('#fineTune summary');
+}
+
 async function setSlider(page, id, value) {
+  if (['height', 'bass', 'vocalFocus'].includes(id)) await openFineTune(page);
   await page.fill(`#${id}`, String(value));
   await page.dispatchEvent(`#${id}`, 'input');
   await page.dispatchEvent(`#${id}`, 'change');
@@ -209,6 +215,7 @@ test('settings are remembered after reloading', async ({ page }) => {
   await page.goto('');
   await loadSong(page, song());
   await page.click('[data-preset="dreamy"]');
+  await openFineTune(page);
   await page.setChecked('#hrtf', false);
   await page.selectOption('#format', 'wav');
   await page.reload();
@@ -411,6 +418,7 @@ async function exportTones(page, { hrtf = true, freqs }) {
   await loadSong(page, { name: 'tones.wav', mimeType: 'audio/wav', buffer: makeTones({ freqs, seconds: 10 }) });
   await page.setChecked('#vocals', false); // mono test tones: let them all orbit
   await page.setChecked('#auto', false);   // fixed 8 s orbit: front at 0 s, right at 2 s, back at 4 s
+  await openFineTune(page);
   await page.setChecked('#hrtf', hrtf);
   await setSlider(page, 'reverb', 0);
   return (await exportAndDownload(page, 'wav')).bytes;
@@ -584,6 +592,7 @@ test('spatial: the orbit settings hide, the choice is remembered, and switching 
   await expect(page.locator('#orbitControls')).toBeHidden();
   await expect(page.locator('#heightName')).toHaveText('Height (sound from above)');
   await expect(page.locator('#modeNote')).toContainText('voice in front');
+  await openFineTune(page);
   await page.click('#hrtf'); // panning model switch on the spatial graph
   await page.click('#hrtf');
   await page.waitForTimeout(500);
@@ -744,4 +753,33 @@ test('8D keeps the song\'s width: an out-of-phase pad, which a mono mix cancels,
   for (const ear of ['left', 'right']) {
     expect(Math.abs(after[ear] - before[ear]), `pad in the ${ear} ear: ${before[ear].toFixed(1)} → ${after[ear].toFixed(1)} dB`).toBeLessThan(3);
   }
+});
+
+test('progress and messages show in a toast that stays in view; final messages hide themselves', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 700 });
+  await page.goto('');
+  await page.setInputFiles('#file', mixFile());
+  // While the song is analysed, the toast with a progress bar is on screen, not below the fold.
+  await expect(page.locator('#toast')).toBeVisible();
+  await expect(page.locator('#toast')).toBeInViewport();
+  await expect(page.locator('#progress')).toBeVisible();
+  await expect(page.locator('#status')).toHaveText('', { timeout: 30_000 });
+  await expect(page.locator('#toast')).toBeHidden();
+  // A final message: no progress bar, and it goes away by itself.
+  await page.clock.install();
+  await page.evaluate(() => setStatus('Done — 1.0 MB MP3 saved.'));
+  await expect(page.locator('#toast')).toBeVisible();
+  await expect(page.locator('#progress')).toBeHidden();
+  await page.clock.runFor(9000);
+  await expect(page.locator('#toast')).toBeHidden();
+});
+
+test('fine-tune: the less used settings start folded away, and work once opened', async ({ page }) => {
+  await page.goto('');
+  await expect(page.locator('#height')).toBeHidden();
+  await expect(page.locator('#hrtf')).toBeHidden();
+  await openFineTune(page);
+  await expect(page.locator('#height')).toBeVisible();
+  await setSlider(page, 'bass', 6);
+  await expect(page.locator('#bassOut')).toHaveText('+6 dB');
 });

@@ -549,7 +549,7 @@ function seekTo(seconds) {
 
 async function loadFile(file) {
   if (!file) return;
-  setStatus('Decoding…');
+  setStatus('Decoding…', 'busy');
   try {
     const ctx = ensureContext();
     const bytes = await file.arrayBuffer();
@@ -592,7 +592,7 @@ async function prepareAuto() {
     state.analysing = true;
     render();
     try {
-      const analysis = await Auto.analyse(buffer, (f) => setStatus(`Listening to the beat… ${Math.round(f * 100)}%`));
+      const analysis = await Auto.analyse(buffer, (f) => setStatus(`Listening to the beat… ${Math.round(f * 100)}%`, f));
       if (buffer !== state.buffer) return; // another song was loaded meanwhile
       state.analysis = analysis;
       setStatus('');
@@ -634,7 +634,7 @@ async function prepareVocals() {
   render();
   try {
     const { centre, ambience } = await Vocals.separate(left, right, buffer.sampleRate, (f) => {
-      if (job === state.vocalJob) setStatus(`${params.vocals ? 'Finding the vocals' : 'Reading the stereo mix'}… ${Math.round(f * 100)}%`);
+      if (job === state.vocalJob) setStatus(`${params.vocals ? 'Finding the vocals' : 'Reading the stereo mix'}… ${Math.round(f * 100)}%`, f);
     }, { focus: params.vocalFocus });
     if (job !== state.vocalJob) return; // a newer song or request took over
     const mono = (data) => {
@@ -675,7 +675,7 @@ async function receiveShared() {
   if (!info || receivingShared) return;
   receivingShared = true;
   try {
-    setStatus(`Opening ${info.name}…`);
+    setStatus(`Opening ${info.name}…`, 'busy');
     const parts = [];
     const piece = 3 * 256 * 1024;
     for (let offset = 0; offset < info.size; offset += piece) {
@@ -784,7 +784,7 @@ async function exportFile() {
   const btn = $('export');
   exporting = true;
   btn.disabled = true;
-  setStatus(`Rendering ${modeName()} version… (this can take a little while for long songs)`);
+  setStatus(`Rendering ${modeName()} version… (this can take a little while for long songs)`, 'busy');
   try {
     // Render straight at a rate MP3 supports; the source node resamples for us.
     const rate = format === 'mp3' && !MP3_RATES.includes(b.sampleRate) ? 44100 : b.sampleRate;
@@ -813,7 +813,7 @@ async function exportFile() {
     const rendered = await off.startRendering();
     normalise(rendered, 0.98);
     const blob = format === 'mp3'
-      ? await encodeMp3(rendered, Number(kbps), (f) => setStatus(`Encoding MP3… ${Math.round(f * 100)}%`))
+      ? await encodeMp3(rendered, Number(kbps), (f) => setStatus(`Encoding MP3… ${Math.round(f * 100)}%`, f))
       : encodeWav(rendered);
     const saved = await download(blob, `${state.fileName} (${modeName()}).${format}`);
     setStatus(saved ? `Done — ${(blob.size / 1048576).toFixed(1)} MB ${format.toUpperCase()} saved.` : 'Save cancelled.');
@@ -953,7 +953,22 @@ function toBase64(bytes) {
 
 const modeName = () => (params.mode === 'spatial' ? 'Spatial' : '8D');
 const fmt = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
-const setStatus = (msg) => { $('status').textContent = msg; };
+/**
+ * The status toast, kept in view wherever the page is scrolled.
+ * progress: a fraction 0..1 for a progress bar, 'busy' for one of unknown
+ * length, or nothing for a final message, which hides itself after a while.
+ */
+let statusTimer = 0;
+function setStatus(msg, progress) {
+  $('status').textContent = msg;
+  $('toast').hidden = !msg;
+  const bar = $('progress');
+  bar.hidden = progress === undefined;
+  bar.classList.toggle('busy', progress === 'busy');
+  if (typeof progress === 'number') $('progressBar').style.width = `${Math.round(progress * 100)}%`;
+  clearTimeout(statusTimer);
+  if (msg && progress === undefined) statusTimer = setTimeout(() => { $('toast').hidden = true; }, 8000);
+}
 
 function orbitAngle() {
   if (autoActive()) return Auto.angleAt(state.motionAngles, position());

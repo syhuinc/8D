@@ -19,8 +19,8 @@
   <main class="wrap">
     <header>
       <h1>8D Converter</h1>
-      <p class="sub">Turn a song into 8D audio that circles around your head. Everything runs in your browser — your file is never uploaded.</p>
-      <p class="note">🎧 Use headphones. 8D doesn't work on speakers.</p>
+      <p class="sub">Turn any song into 8D audio that moves around your head, or spatial audio that surrounds you. Everything runs on your device — your file is never uploaded.</p>
+      <p class="note">🎧 Use headphones. 8D and spatial audio don't work on speakers.</p>
     </header>
 
     <label id="drop" class="drop" for="file">
@@ -92,22 +92,26 @@
         <label for="reverb">Reverb <output id="reverbOut"></output></label>
         <input id="reverb" type="range" min="0" max="100" value="30">
       </div>
-      <div class="ctl">
-        <label for="height"><span id="heightName">Height wobble</span> <output id="heightOut"></output></label>
-        <input id="height" type="range" min="0" max="100" value="0">
-      </div>
-      <div class="ctl">
-        <label for="bass">Bass boost <output id="bassOut"></output></label>
-        <input id="bass" type="range" min="0" max="12" step="1" value="0">
-      </div>
-      <label class="check vocals"><input id="vocals" type="checkbox" checked> Keep vocals in the center (only the music orbits)</label>
+      <label class="check vocals"><input id="vocals" type="checkbox" checked> Keep vocals in the center (only the music moves)</label>
       <p id="vocalsNote" class="hint">Works on stereo songs. Other sounds mixed dead-center, often snare or lead guitar, stay in the middle with the voice.</p>
-      <div id="vocalFocusRow" class="ctl indent">
-        <label for="vocalFocus">Vocal strictness <output id="vocalFocusOut"></output></label>
-        <input id="vocalFocus" type="range" min="0" max="100" value="50">
-        <p class="hint flush">Instruments stuck in the middle? Go stricter. Voice drifting? Go looser.</p>
-      </div>
-      <label class="check"><input id="hrtf" type="checkbox" checked> 3D headphone mode (HRTF)</label>
+
+      <details id="fineTune" class="fine-tune">
+        <summary>Fine-tune</summary>
+        <div class="ctl">
+          <label for="height"><span id="heightName">Height wobble</span> <output id="heightOut"></output></label>
+          <input id="height" type="range" min="0" max="100" value="0">
+        </div>
+        <div class="ctl">
+          <label for="bass">Bass boost <output id="bassOut"></output></label>
+          <input id="bass" type="range" min="0" max="12" step="1" value="0">
+        </div>
+        <div id="vocalFocusRow" class="ctl">
+          <label for="vocalFocus">Vocal strictness <output id="vocalFocusOut"></output></label>
+          <input id="vocalFocus" type="range" min="0" max="100" value="50">
+          <p class="hint flush">Instruments stuck in the middle with the voice? Go stricter. Voice drifting? Go looser.</p>
+        </div>
+        <label class="check"><input id="hrtf" type="checkbox" checked> 3D headphone mode (HRTF)</label>
+      </details>
 
       <div class="ctl">
         <label for="format">Download format</label>
@@ -120,8 +124,13 @@
       </div>
 
       <button id="export" class="primary wide" type="button">Download 8D version</button>
-      <p id="status" class="status" role="status"></p>
     </section>
+
+    <!-- Progress and results, kept in view wherever the page is scrolled. -->
+    <div id="toast" class="toast" hidden>
+      <p id="status" class="status" role="status"></p>
+      <div id="progress" class="progress" hidden><div id="progressBar"></div></div>
+    </div>
 
     <footer>
       <p>Only convert music you have the right to use. Sharing converted copies of copyrighted songs is still sharing copyrighted songs.</p>
